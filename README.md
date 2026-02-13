@@ -1,4 +1,4 @@
-# AI Molecular Generation Framework (MolGen)
+# AI Molecular Generation Framework (LLMsFold)
 
 An automated drug discovery pipeline that uses Large Language Models (LLMs) and the **NVIDIA Boltz-2** biological prediction engine to iteratively design and evaluate novel molecules.
 
@@ -25,7 +25,6 @@ An automated drug discovery pipeline that uses Large Language Models (LLMs) and 
 ```text
 molgen-framework/
 ├── .env                  # Private: API keys and default file paths
-├── .gitignore            # Keeps .env and .venv out of GitHub
 ├── pyproject.toml        # Modern Project Metadata (managed by uv)
 ├── uv.lock               # Deterministic dependency lockfile
 ├── main.py               # Main CLI entry point (Orchestration)
@@ -40,7 +39,7 @@ molgen-framework/
 ├── data/                 # Input data folder
 │   ├── acvr1_R206H_clean.pdb  # Your specific target protein
 │   └── few_shot_smiles1.csv   # Initial reference molecules
-└── results/              # Auto-generated CSV reports & unified_report.csv
+└── results/              # Auto-generated CSV reports 
 ``` 
 
 ## Installation
