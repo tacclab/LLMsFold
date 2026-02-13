@@ -1,6 +1,6 @@
 import re
 from rdkit import Chem
-from rdkit.Chem import rdFingerprintGenerator, DataStructs
+from rdkit.Chem import DataStructs, rdFingerprintGenerator, QED, RDConfig, Descriptors, FilterCatalog
 import subprocess
 import pandas as pd
 import os
@@ -25,17 +25,26 @@ def extract_sequence_from_pdb(pdb_path):
 ######################
 
 #######################
+def calculate_reward(row):
+                    affinity = row['adj_affinity']
+                    penalty = 0.5 * affinity if row['MaxSim'] > 0.9 else 0
+                    return affinity - penalty
 
-def validate_smiles(smiles):
-    if not smiles or not isinstance(smiles, str): return False
-    smiles = smiles.strip().strip('.')
-    try:
-        mol = Chem.MolFromSmiles(smiles)
-        if mol:
-            Chem.SanitizeMol(mol)
-            return True
-        return False
-    except: return False
+
+######################
+
+#######################
+
+def passes_lipinski(mol):
+    """Verifies standard Lipinski's Rule of Five criteria."""
+    if mol is None: return False
+    return all([
+        Descriptors.MolWt(mol) <= 500,
+        Descriptors.MolLogP(mol) <= 5,
+        Descriptors.NumHDonors(mol) <= 5,
+        Descriptors.NumHAcceptors(mol) <= 10
+    ])
+
 
 ######################
 
