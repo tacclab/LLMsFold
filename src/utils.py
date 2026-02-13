@@ -147,10 +147,13 @@ def get_binding_pockets_and_residues(pdb_path, output_dir="results"):
     os.makedirs(output_dir, exist_ok=True)
     pd.DataFrame(pocket_data).to_csv(f"{output_dir}/all_pockets.csv", index=False)
 
-   ## hardcoded to get the 5th pocket for CD19
-    best_pocket = pockets[4]
+    # hardcoded to get the 5th pocket for CD19
+    # best_pocket = pockets[4]
+    # center = best_pocket.center()
+    best_pocket = max(pockets, key=lambda p: (p.x_range[1] - p.x_range[0]) *
+                                         (p.y_range[1] - p.y_range[0]) *
+                                         (p.z_range[1] - p.z_range[0]))
     center = best_pocket.center()
-    
 
     mol = Chem.MolFromPDBFile(pdb_path)
     conf = mol.GetConformer()
