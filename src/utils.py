@@ -150,10 +150,32 @@ def get_binding_pockets_and_residues(pdb_path, output_dir="results"):
     # hardcoded to get the 5th pocket for CD19
     # best_pocket = pockets[4]
     # center = best_pocket.center()
-    best_pocket = max(pockets, key=lambda p: (p.x_range[1] - p.x_range[0]) *
-                                         (p.y_range[1] - p.y_range[0]) *
-                                         (p.z_range[1] - p.z_range[0]))
-    center = best_pocket.center()
+    print("\nDetected pockets:")
+    for row in pocket_data:
+        print(f"[{row['pocket_id']}] Center: ({row['center_x']:.2f}, {row['center_y']:.2f}, {row['center_z']:.2f}), "
+              f"Volume ≈ {row['volume_approx']:.2f} Å³")
+
+    while True:
+        try:
+            choice = int(input(f"\nSelect pocket ID to use (1-{len(pockets)}), or 0 to use largest volume: "))
+            if choice == 0:
+                best_pocket = max(pockets, key=lambda p: (p.x_range[1] - p.x_range[0]) *
+                                                 (p.y_range[1] - p.y_range[0]) *
+                                                 (p.z_range[1] - p.z_range[0]))
+                print("Selected largest volume pocket automatically.")
+                break
+            elif 1 <= choice <= len(pockets):
+                best_pocket = pockets[choice - 1]
+                print(f"Selected pocket {choice}.")
+                break
+            else:
+                print("Invalid choice. Try again.")
+        except ValueError:
+            print("Please enter a number.")
+    # best_pocket = max(pockets, key=lambda p: (p.x_range[1] - p.x_range[0]) *
+    #                                      (p.y_range[1] - p.y_range[0]) *
+    #                                      (p.z_range[1] - p.z_range[0]))
+    # center = best_pocket.center()
 
     mol = Chem.MolFromPDBFile(pdb_path)
     conf = mol.GetConformer()
