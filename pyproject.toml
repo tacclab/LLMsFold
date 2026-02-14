@@ -10,6 +10,8 @@ dependencies = [
     "httpx>=0.28.1",
     "lightning>=2.6.0",
     "pandas>=2.3.3",
+    "pydantic>=2.11.7",
+    "pydantic-settings>=2.10.1",
     "prody>=2.6.1",
     "rdkit>=2025.9.3",
     "torch>=2.9.1",
@@ -19,5 +21,30 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "mypy>=1.18.2",
+    "pre-commit>=4.3.0",
     "pytest>=9.0.2",
+    "ruff>=0.13.2",
 ]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+exclude = ["sascorer.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["main.py", "src"]
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+show_error_codes = true
+pretty = true
+
+[[tool.mypy.overrides]]
+module = ["src.chemistry", "src.nvidia_client"]
+disable_error_code = ["attr-defined"]
