@@ -7,7 +7,8 @@
 <p align="center">
   <strong>AI Molecular Generation Framework (LLMsFold)</strong>
 </p>
-An automated drug discovery pipeline that uses Large Language Models (LLMs) and the **NVIDIA Boltz-2** biological prediction engine to iteratively design and evaluate novel molecules.
+
+An automated drug discovery pipeline that uses Large Language Models (LLMs) and the *NVIDIA Boltz-2* biological prediction engine to iteratively design and evaluate novel molecules.
 
 ## Key Features
 * **Dynamic PDB Parsing**: Automatically extracts protein sequences from standard `.pdb` files for docking and affinity prediction.
