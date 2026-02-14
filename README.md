@@ -1,6 +1,6 @@
 # AI Molecular Generation Framework (LLMsFold)
 <p align="center">
-  <img src="images/logo.png" alt="LLMsFold Logo" width="300">
+  <img src="images/LLMsFold.png" alt="LLMsFold Logo" width="300">
  
 </p>
 
