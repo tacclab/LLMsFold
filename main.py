@@ -29,14 +29,14 @@ async def main():
         print(f"Error: PDB file not found at {args.pdb}")
         return
 
-    # 1. Extract sequence from PDB
+    #  Extract sequence from PDB
     print(f"Extracting sequence from {args.pdb}...")
     protein_seq = extract_sequence_from_pdb(args.pdb)
     
-    # 2. Initialize Boltz Client
+    #  Initialize Boltz Client
     boltz = BoltzClient(api_key=nv_key)
     
-    # 3. Run Pipeline
+    #  Run Pipeline
     await generate_molecules_unified( pdb_path=args.pdb,
         boltz_client=boltz,
         output_dir=args.out,
