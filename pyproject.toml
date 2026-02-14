@@ -1,8 +1,9 @@
 [project]
 name = "molgen-framework"
 version = "0.1.0"
-description = "Add your description here"
+description = "AI Molecular Generation Framework (LLMsFold)"
 readme = "README.md"
+license = "LICENSE.md"
 requires-python = ">=3.12"
 dependencies = [
     "deepchem>=2.8.0",

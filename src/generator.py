@@ -19,6 +19,7 @@ from src.chemistry import (
 from src.clients import get_cached_groq_client
 from src.nvidia_client import BoltzClient
 from src.pocket import get_binding_pockets_and_residues
+from src.prompt import MODEL_SYSTEM_PROMPT, build_user_prompt
 from src.schemas import PipelineOptions
 from src.services import PubChemService
 
@@ -68,18 +69,9 @@ class MoleculeGenerator:
         leads_text: str,
         max_samples: int,
     ) -> str:
-        """Builds prompt variant based on whether pocket constraints are used."""
+        """Compatibility wrapper around prompt templates module."""
 
-        if use_pocket_data:
-            return (
-                f"Design {max_samples} drug-like molecules for a binding pocket containing: {pocket_residues}. "
-                f"Strategy: Create fragments for H-bonds with these residues while inspired by: {leads_text}. "
-                "Return ONLY the Python list."
-            )
-        return (
-            f"Generate {max_samples} bioisosteres or analogs of: {leads_text}. "
-            "Improve drug-likeness and novelty. Return ONLY the Python list."
-        )
+        return build_user_prompt(use_pocket_data, pocket_residues, leads_text, max_samples)
 
     @staticmethod
     def _post_process_scores(results_df: pd.DataFrame, target_fps: list[Any]) -> pd.DataFrame:
@@ -132,14 +124,6 @@ class MoleculeGenerator:
         else:
             print("Running in Few-Shot mode (Ignoring pocket constraints).")
 
-        base_system = (
-            "You are an expert medicinal chemist. Your goal is to generate novel, chemically valid SMILES strings "
-            "as a Python list: ['SMILES1', 'SMILES2']. "
-            "CONSTRAINTS: Satisfy Lipinski's Rule of Five, ensure synthetic feasibility, and avoid PAINS. "
-            "TECHNICAL RULES: 1. Ensure all rings are explicitly closed. 2. Maintain valid valency. "
-            "3. Use [nH] for aromatic nitrogen. 4. Specify stereochemistry (@/@@) where relevant."
-        )
-
         for iteration in range(1, options.max_iterations + 1):
             print(f"\n--- ITERATION {iteration} ---")
             leads_text = ", ".join(context_leads[-5:])
@@ -154,7 +138,7 @@ class MoleculeGenerator:
                 completion = self._groq_client.chat.completions.create(
                     model="llama-3.3-70b-versatile",
                     messages=[
-                        {"role": "system", "content": base_system},
+                        {"role": "system", "content": MODEL_SYSTEM_PROMPT},
                         {"role": "user", "content": user_content},
                     ],
                     temperature=0.8,
