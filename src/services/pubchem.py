@@ -5,7 +5,10 @@ import asyncio
 import httpx
 
 from src.clients import get_cached_http_client
+from src.core.logging import get_logger
 from src.schemas import PatentCheckResult
+
+logger = get_logger(__name__)
 
 
 class PubChemService:
@@ -77,7 +80,7 @@ class PubChemService:
                 substructure_patents=substructure_patents,
             )
         except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
-            print(f"PubChem Query Error: {exc}")
+            logger.warning("PubChem query error: %s", exc)
             return PatentCheckResult()
 
 

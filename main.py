@@ -8,10 +8,13 @@ from pydantic import ValidationError
 
 from src.chemistry import extract_sequence_from_pdb
 from src.clients import close_cached_clients
-from src.config import get_settings
+from src.core.config import get_settings
+from src.core.logging import configure_logging, get_logger
 from src.generator import MoleculeGenerator
 from src.nvidia_client import BoltzClient
 from src.schemas import PipelineOptions
+
+logger = get_logger(__name__)
 
 
 def _build_parser(defaults: dict[str, str | int]) -> argparse.ArgumentParser:
@@ -36,13 +39,17 @@ def _build_parser(defaults: dict[str, str | int]) -> argparse.ArgumentParser:
 async def main() -> None:
     """Runs CLI flow from argument parsing to report generation."""
 
+    configure_logging()
+
     try:
         settings = get_settings()
     except ValidationError as exc:
-        print("Error: Missing required environment variables in `.env` or shell:")
+        logger.error("Error: Missing required environment variables in `.env` or shell:")
         for error in exc.errors():
-            print(f"  - {'.'.join(str(item) for item in error['loc'])}")
+            logger.error("  - %s", ".".join(str(item) for item in error["loc"]))
         return
+
+    configure_logging(settings.log_level)
 
     parser = _build_parser(
         {
@@ -56,10 +63,10 @@ async def main() -> None:
     args = parser.parse_args()
 
     if not os.path.exists(args.pdb):
-        print(f"Error: PDB file not found at {args.pdb}")
+        logger.error("Error: PDB file not found at %s", args.pdb)
         return
 
-    print(f"Extracting sequence from {args.pdb}...")
+    logger.info("Extracting sequence from %s...", args.pdb)
     protein_sequence = extract_sequence_from_pdb(args.pdb)
 
     options = PipelineOptions(

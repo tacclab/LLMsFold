@@ -17,8 +17,8 @@ from src.chemistry import (
     passes_lipinski,
 )
 from src.clients import get_cached_groq_client
-from src.config import get_generator_settings
-from src.constants import (
+from src.core.config import get_generator_settings
+from src.core.constants import (
     ADJ_AFFINITY_THRESHOLD,
     CONTEXT_LEADS_WINDOW,
     DEFAULT_LLM_MODEL,
@@ -30,11 +30,14 @@ from src.constants import (
     SEED_SMILES_LIMIT,
     UNIFIED_REPORT_FILENAME,
 )
+from src.core.logging import get_logger
 from src.nvidia_client import BoltzClient
 from src.pocket import get_binding_pockets_and_residues
 from src.prompt import MODEL_SYSTEM_PROMPT, build_user_prompt
 from src.schemas import PipelineOptions
 from src.services import PubChemService
+
+logger = get_logger(__name__)
 
 
 @lru_cache(maxsize=1)
@@ -140,13 +143,13 @@ class MoleculeGenerator:
                 options.output_dir,
             )
             clean_indices = self._extract_residue_indices(pocket_residues)
-            print(f"Targeting Pocket at {pocket_coords}")
-            print(f"Cleaned Residue Indices: {clean_indices}")
+            logger.info("Targeting Pocket at %s", pocket_coords)
+            logger.info("Cleaned Residue Indices: %s", clean_indices)
         else:
-            print("Running in Few-Shot mode (Ignoring pocket constraints).")
+            logger.info("Running in Few-Shot mode (Ignoring pocket constraints).")
 
         for iteration in range(1, options.max_iterations + 1):
-            print(f"\n--- ITERATION {iteration} ---")
+            logger.info("--- ITERATION %s ---", iteration)
             leads_text = ", ".join(context_leads[-CONTEXT_LEADS_WINDOW:])
             user_content = self._build_user_prompt(
                 options.use_pocket_data,
@@ -172,7 +175,7 @@ class MoleculeGenerator:
                 for smiles in new_smiles:
                     mol = Chem.MolFromSmiles(smiles, sanitize=True)
                     if not mol:
-                        print(f"Skipping invalid/unkekulizable SMILES: {smiles}")
+                        logger.warning("Skipping invalid/unkekulizable SMILES: %s", smiles)
                         continue
                     if self._filter_catalog.HasMatch(mol):
                         continue
@@ -189,15 +192,18 @@ class MoleculeGenerator:
                 if not scored.empty:
                     global_registry.extend(scored.to_dict("records"))
             except Exception as exc:  # noqa: BLE001
-                print(f"Error in iteration {iteration}: {exc}")
+                logger.error("Error in iteration %s: %s", iteration, exc, exc_info=True)
                 continue
 
         if not global_registry:
-            print("No molecules were successfully generated. Check LLM connectivity or SMILES validation.")
+            logger.warning(
+                "No molecules were successfully generated. "
+                "Check LLM connectivity or SMILES validation."
+            )
             return None
 
         final_hits = pd.DataFrame(global_registry).drop_duplicates(subset="SMILES")
-        print(f"\nVerifying IP status for {len(final_hits)} unique candidates...")
+        logger.info("Verifying IP status for %s unique candidates...", len(final_hits))
 
         patent_checks = await asyncio.gather(
             *(self._pubchem_service.check_patents(smiles) for smiles in final_hits["SMILES"]),
@@ -209,7 +215,7 @@ class MoleculeGenerator:
         os.makedirs(options.output_dir, exist_ok=True)
         report_path = os.path.join(options.output_dir, UNIFIED_REPORT_FILENAME)
         final_hits.to_csv(report_path, index=False)
-        print(f"Workflow Complete. Results in {report_path}")
+        logger.info("Workflow Complete. Results in %s", report_path)
         return report_path
 
 

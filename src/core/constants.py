@@ -1,0 +1,21 @@
+"""Project-wide defaults and fixed thresholds."""
+
+DEFAULT_PDB_FILE = "data/target.pdb"
+DEFAULT_FEW_SHOT_CSV = "data/few_shot_smiles1.csv"
+DEFAULT_OUTPUT_DIR = "results"
+DEFAULT_MAX_ITERATIONS = 3
+DEFAULT_MAX_SAMPLES = 5
+
+DEFAULT_LLM_MODEL = "llama-3.3-70b-versatile"
+DEFAULT_LLM_TEMPERATURE = 0.8
+
+SEED_SMILES_LIMIT = 5
+CONTEXT_LEADS_WINDOW = 5
+MORGAN_FINGERPRINT_RADIUS = 2
+ADJ_AFFINITY_THRESHOLD = 0.6
+SAS_SCORE_MAX = 6.0
+
+UNIFIED_REPORT_FILENAME = "unified_report.csv"
+
+DEFAULT_LOG_LEVEL = "INFO"
+DEFAULT_LOG_FORMAT = "%(message)s"

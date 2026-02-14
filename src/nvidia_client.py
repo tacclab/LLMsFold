@@ -11,7 +11,10 @@ from rdkit.Chem import QED, Descriptors
 
 import sascorer
 from src.clients import get_cached_http_client
+from src.core.logging import get_logger
 from src.schemas import BoltzLigandAffinity, BoltzPrediction, MoleculeRecord
+
+logger = get_logger(__name__)
 
 
 class BoltzClient:
@@ -142,7 +145,7 @@ class BoltzClient:
             if not mol:
                 continue
 
-            print(f"\nEvaluating SMILES: {smiles}")
+            logger.info("Evaluating SMILES: %s", smiles)
             prediction = await self.make_nvcf_call(
                 smiles=smiles,
                 sequence=sequence,
@@ -169,13 +172,13 @@ class BoltzClient:
             pic50 = ligand_affinity.affinity_pic50[0] if ligand_affinity.affinity_pic50 else 0.0
             ic50_um = pow(10, -pic50) * 1e6
 
-            print(f"  > Predicted pTM:           {ptm:.3f}")
-            print(f"  > Predicted ipTM:          {iptm:.3f}")
-            print(f"  > Confidence Score:        {confidence:.3f}")
-            print(f"  > Average pLDDT:           {plddt:.3f}")
-            print(f"  > Affinity Probability:    {affinity_probability:.3f}")
-            print(f"  > Predicted pIC50:         {pic50:.3f}")
-            print(f"  > Predicted IC50 (µM):     {ic50_um:.3f}")
+            logger.info("  > Predicted pTM:           %.3f", ptm)
+            logger.info("  > Predicted ipTM:          %.3f", iptm)
+            logger.info("  > Confidence Score:        %.3f", confidence)
+            logger.info("  > Average pLDDT:           %.3f", plddt)
+            logger.info("  > Affinity Probability:    %.3f", affinity_probability)
+            logger.info("  > Predicted pIC50:         %.3f", pic50)
+            logger.info("  > Predicted IC50 (µM):     %.3f", ic50_um)
 
             record = MoleculeRecord(
                 SMILES=smiles,

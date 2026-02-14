@@ -10,6 +10,10 @@ import numpy as np
 import pandas as pd
 from rdkit import Chem
 
+from src.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def setup_p2rank() -> str:
     """Locates the `prank` executable and ensures execute permissions.
@@ -50,7 +54,7 @@ def get_p2rank_pocket(pdb_path: str) -> str:
     output_dir = os.path.abspath("p2rank_output")
     os.makedirs(output_dir, exist_ok=True)
 
-    print(f"Running P2Rank analysis on {pdb_path}...")
+    logger.info("Running P2Rank analysis on %s...", pdb_path)
     cmd = [p2rank_executable, "predict", "-f", pdb_path, "-o", output_dir, "-visualizations", "0"]
     subprocess.run(cmd, check=True, capture_output=True)
 
@@ -79,9 +83,9 @@ def _pocket_volume(pocket: Any) -> float:
 def _select_pocket_interactively(pockets: list[Any], pocket_data: list[dict[str, float]]) -> Any:
     """Prompts user for pocket selection while preserving previous behavior."""
 
-    print("\nDetected pockets:")
+    logger.info("Detected pockets:")
     for row in pocket_data:
-        print(
+        logger.info(
             f"[{int(row['pocket_id'])}] Center: ({row['center_x']:.2f}, {row['center_y']:.2f}, "
             f"{row['center_z']:.2f}), Volume ≈ {row['volume_approx']:.2f} Å³"
         )
@@ -90,14 +94,14 @@ def _select_pocket_interactively(pockets: list[Any], pocket_data: list[dict[str,
         try:
             choice = int(input(f"\nSelect pocket ID to use (1-{len(pockets)}), or 0 to use largest volume: "))
             if choice == 0:
-                print("Selected largest volume pocket automatically.")
+                logger.info("Selected largest volume pocket automatically.")
                 return max(pockets, key=_pocket_volume)
             if 1 <= choice <= len(pockets):
-                print(f"Selected pocket {choice}.")
+                logger.info("Selected pocket %s.", choice)
                 return pockets[choice - 1]
-            print("Invalid choice. Try again.")
+            logger.warning("Invalid choice. Try again.")
         except ValueError:
-            print("Please enter a number.")
+            logger.warning("Please enter a number.")
 
 
 def get_binding_pockets_and_residues(pdb_path: str, output_dir: str = "results") -> tuple[str, str]:
