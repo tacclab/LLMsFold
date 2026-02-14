@@ -17,6 +17,19 @@ from src.chemistry import (
     passes_lipinski,
 )
 from src.clients import get_cached_groq_client
+from src.config import get_generator_settings
+from src.constants import (
+    ADJ_AFFINITY_THRESHOLD,
+    CONTEXT_LEADS_WINDOW,
+    DEFAULT_LLM_MODEL,
+    DEFAULT_LLM_TEMPERATURE,
+    DEFAULT_MAX_ITERATIONS,
+    DEFAULT_MAX_SAMPLES,
+    MORGAN_FINGERPRINT_RADIUS,
+    SAS_SCORE_MAX,
+    SEED_SMILES_LIMIT,
+    UNIFIED_REPORT_FILENAME,
+)
 from src.nvidia_client import BoltzClient
 from src.pocket import get_binding_pockets_and_residues
 from src.prompt import MODEL_SYSTEM_PROMPT, build_user_prompt
@@ -42,6 +55,8 @@ class MoleculeGenerator:
         groq_api_key: str,
         boltz_client: BoltzClient,
         pubchem_service: PubChemService | None = None,
+        llm_model: str = DEFAULT_LLM_MODEL,
+        llm_temperature: float = DEFAULT_LLM_TEMPERATURE,
     ) -> None:
         """Initializes a generator with cached service clients."""
 
@@ -49,6 +64,8 @@ class MoleculeGenerator:
         self._boltz_client = boltz_client
         self._pubchem_service = pubchem_service or PubChemService()
         self._filter_catalog = _get_filter_catalog()
+        self._llm_model = llm_model
+        self._llm_temperature = llm_temperature
 
     @staticmethod
     def _extract_residue_indices(pocket_residues: str | list[str] | None) -> list[int]:
@@ -84,9 +101,11 @@ class MoleculeGenerator:
             lambda smiles: {"MaxSim": get_max_similarity(smiles, target_fps)}
         ).apply(pd.Series)
         enriched = pd.concat([results_df, metrics], axis=1)
-        enriched["adj_affinity"] = enriched["Affinity_Prob"].apply(lambda value: value if value > 0.6 else 0)
+        enriched["adj_affinity"] = enriched["Affinity_Prob"].apply(
+            lambda value: value if value > ADJ_AFFINITY_THRESHOLD else 0
+        )
         enriched["score"] = enriched.apply(calculate_reward, axis=1)
-        return enriched[enriched["SAS"] <= 6]
+        return enriched[enriched["SAS"] <= SAS_SCORE_MAX]
 
     async def run(self, options: PipelineOptions) -> str | None:
         """Executes iterative candidate generation and writes the final CSV.
@@ -99,9 +118,11 @@ class MoleculeGenerator:
         """
 
         few_shot_data = pd.read_csv(options.few_shot_csv, sep=";")
-        positives = few_shot_data["Smiles"].dropna().tolist()[:5]
+        positives = few_shot_data["Smiles"].dropna().tolist()[:SEED_SMILES_LIMIT]
 
-        fingerprint_generator = rdFingerprintGenerator.GetMorganGenerator(radius=2)
+        fingerprint_generator = rdFingerprintGenerator.GetMorganGenerator(
+            radius=MORGAN_FINGERPRINT_RADIUS
+        )
         target_fps = [
             fingerprint_generator.GetFingerprint(Chem.MolFromSmiles(smiles))
             for smiles in positives
@@ -126,7 +147,7 @@ class MoleculeGenerator:
 
         for iteration in range(1, options.max_iterations + 1):
             print(f"\n--- ITERATION {iteration} ---")
-            leads_text = ", ".join(context_leads[-5:])
+            leads_text = ", ".join(context_leads[-CONTEXT_LEADS_WINDOW:])
             user_content = self._build_user_prompt(
                 options.use_pocket_data,
                 pocket_residues,
@@ -136,12 +157,12 @@ class MoleculeGenerator:
 
             try:
                 completion = self._groq_client.chat.completions.create(
-                    model="llama-3.3-70b-versatile",
+                    model=self._llm_model,
                     messages=[
                         {"role": "system", "content": MODEL_SYSTEM_PROMPT},
                         {"role": "user", "content": user_content},
                     ],
-                    temperature=0.8,
+                    temperature=self._llm_temperature,
                 )
 
                 raw_content = completion.choices[0].message.content or ""
@@ -186,7 +207,7 @@ class MoleculeGenerator:
         final_hits = final_hits.sort_values(by=["Is_Novel", "score"], ascending=[False, False])
 
         os.makedirs(options.output_dir, exist_ok=True)
-        report_path = os.path.join(options.output_dir, "unified_report.csv")
+        report_path = os.path.join(options.output_dir, UNIFIED_REPORT_FILENAME)
         final_hits.to_csv(report_path, index=False)
         print(f"Workflow Complete. Results in {report_path}")
         return report_path
@@ -198,8 +219,8 @@ async def generate_molecules_unified(
     output_dir: str,
     protein_sequence: str,
     few_shot_csv: str,
-    max_iterations: int = 3,
-    max_samples: int = 5,
+    max_iterations: int = DEFAULT_MAX_ITERATIONS,
+    max_samples: int = DEFAULT_MAX_SAMPLES,
     use_pocket_data: bool = True,
 ) -> str | None:
     """Backward-compatible function wrapper for the original API."""
@@ -218,5 +239,11 @@ async def generate_molecules_unified(
         use_pocket_data=use_pocket_data,
     )
 
-    generator = MoleculeGenerator(groq_api_key=groq_api_key, boltz_client=boltz_client)
+    runtime_settings = get_generator_settings()
+    generator = MoleculeGenerator(
+        groq_api_key=groq_api_key,
+        boltz_client=boltz_client,
+        llm_model=runtime_settings.llm_model,
+        llm_temperature=runtime_settings.llm_temperature,
+    )
     return await generator.run(options)

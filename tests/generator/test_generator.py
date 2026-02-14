@@ -170,6 +170,45 @@ def test_run_returns_none_when_no_molecules(
     assert asyncio.run(workflow.run(no_pocket_options)) is None
 
 
+def test_run_uses_configured_llm_model_and_temperature(
+    pipeline_options,
+    generator_dependencies,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Generation request uses runtime-configured model and temperature values."""
+
+    no_pocket_options = pipeline_options.model_copy(update={"use_pocket_data": False})
+
+    fake_molecule = object()
+    monkeypatch.setattr(
+        generator.Chem,
+        "MolFromSmiles",
+        lambda smiles, **_kwargs: fake_molecule if smiles in {"CCO", "CCN", "CCC"} else None,
+    )
+
+    fake_fp_generator = MagicMock()
+    fake_fp_generator.GetFingerprint.side_effect = lambda mol: f"fp-{id(mol)}"
+    monkeypatch.setattr(generator.rdFingerprintGenerator, "GetMorganGenerator", lambda radius: fake_fp_generator)
+
+    monkeypatch.setattr(generator, "parse_smiles_from_text", lambda _raw: [])
+
+    boltz_client = MagicMock()
+    boltz_client.compute_properties = AsyncMock(return_value=pd.DataFrame())
+
+    workflow = MoleculeGenerator(
+        groq_api_key="g-key",
+        boltz_client=boltz_client,
+        pubchem_service=MagicMock(),
+        llm_model="llama-test",
+        llm_temperature=0.25,
+    )
+    assert asyncio.run(workflow.run(no_pocket_options)) is None
+
+    create_kwargs = generator_dependencies["groq"].chat.completions.create.call_args.kwargs
+    assert create_kwargs["model"] == "llama-test"
+    assert create_kwargs["temperature"] == pytest.approx(0.25)
+
+
 def test_generate_molecules_unified_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     """Legacy wrapper rejects missing GROQ key before generator construction."""
 
@@ -191,9 +230,17 @@ def test_generate_molecules_unified_calls_generator(monkeypatch: pytest.MonkeyPa
     """Legacy wrapper creates options and delegates to `MoleculeGenerator.run`."""
 
     class FakeGenerator:
-        def __init__(self, groq_api_key: str, boltz_client) -> None:
+        def __init__(
+            self,
+            groq_api_key: str,
+            boltz_client,
+            llm_model: str,
+            llm_temperature: float,
+        ) -> None:
             self.groq_api_key = groq_api_key
             self.boltz_client = boltz_client
+            self.llm_model = llm_model
+            self.llm_temperature = llm_temperature
 
         async def run(self, options):
             assert options.pdb_path == "protein.pdb"

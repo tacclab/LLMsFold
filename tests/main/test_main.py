@@ -14,13 +14,17 @@ import main
 def fake_settings() -> SimpleNamespace:
     """Settings object mirroring fields used by `main.main`."""
 
-    secret = lambda value: SimpleNamespace(get_secret_value=lambda: value)
+    def secret(value: str) -> SimpleNamespace:
+        return SimpleNamespace(get_secret_value=lambda: value)
+
     return SimpleNamespace(
         pdb_file="data/target.pdb",
         few_shot_csv="data/few_shot.csv",
         output_dir="results",
         max_iterations=2,
         max_samples=3,
+        llm_model="llama-3.3-70b-versatile",
+        llm_temperature=0.8,
         nvidia_api_key=secret("n-key"),
         groq_api_key=secret("g-key"),
     )

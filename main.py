@@ -76,6 +76,8 @@ async def main() -> None:
     generator = MoleculeGenerator(
         groq_api_key=settings.groq_api_key.get_secret_value(),
         boltz_client=boltz_client,
+        llm_model=settings.llm_model,
+        llm_temperature=settings.llm_temperature,
     )
 
     try:
