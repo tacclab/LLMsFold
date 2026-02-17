@@ -77,7 +77,7 @@ wget https://raw.githubusercontent.com/rdkit/rdkit/master/Contrib/SA_Score/sasco
 wget https://raw.githubusercontent.com/rdkit/rdkit/master/Contrib/SA_Score/fpscores.pkl.gz
 ```
 ## Versioning
-* MolGen follows Semantic Versioning. We use pyproject.toml to manage project metadata. To check your current environment and versioning info:
+* LLMsFold follows Semantic Versioning. We use pyproject.toml to manage project metadata. To check your current environment and versioning info:
 
 ```bash
 uv pip list | grep molgen
