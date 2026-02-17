@@ -191,7 +191,7 @@ class BoltzClient:
                 IC50_uM=ic50_um,
                 MolWt=round(Descriptors.MolWt(mol), 2),
                 LogP=round(Descriptors.MolLogP(mol), 2),
-                QED=round(QED.qed(mol), 3),
+                QED= QED.qed(mol),
                 SAS=round(sascorer.calculateScore(mol), 3),
                 TPSA=round(Descriptors.TPSA(mol), 2),
                 H_Acceptors=int(Descriptors.NumHAcceptors(mol)),
