@@ -12,6 +12,7 @@ Owns top-level orchestration: settings load, argument parsing, sequence extracti
 - Always close cached async clients in `finally`.
 
 ## Flow
+
 ```mermaid
 flowchart TD
     A[Start] --> B[configure_logging]
