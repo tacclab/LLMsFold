@@ -15,19 +15,6 @@ Owns top-level orchestration: settings load, argument parsing, sequence extracti
 
 ```mermaid
 flowchart TD
-    <!-- A[Start] --> B[configure_logging]
-    B --> C[get_settings]
-    C --> D[_build_parser + parse_args]
-    D --> E{PDB exists?}
-    E -->|No| F[log error and return]
-    E -->|Yes| G[extract_sequence_from_pdb]
-    G --> H[build PipelineOptions]
-    H --> I[create BoltzClient + MoleculeGenerator]
-    I --> J[await generator.run(options)]
-    J --> K[await close_cached_clients] -->
-```
-```mermaid
-flowchart TD
     A[Start] --> B[configure_logging]
     B --> C[get_settings]
     C --> D["_build_parser + parse_args"]
