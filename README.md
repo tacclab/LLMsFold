@@ -95,6 +95,8 @@ NVIDIA_API_KEY="your_nvidia_key"
 PDB_FILE="data/acvr1_R206H_clean.pdb"
 FEW_SHOT_CSV="data/few_shot_smiles.csv"
 OUTPUT_DIR="results"
+LLM_MODEL="llama-3.3-70b-versatile"
+LLM_TEMPERATURE=0.8
 ```
 2. Run the automated pipeline
 
