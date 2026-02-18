@@ -5,9 +5,12 @@
 
 LLMsFold is an automated molecule generation pipeline for early drug discovery. It combines LLM-driven proposal generation with NVIDIA Boltz scoring, chemistry filters, and PubChem novelty checks.
 
+## The LLMsFold Framework
 <p align="center">
   <img src="images/finalwork.png" alt="LLMsFold workflow">
 </p>
+
+
 
 ## Architecture
 ```mermaid
