@@ -7,7 +7,7 @@ LLMsFold is an automated molecule generation pipeline for early drug discovery. 
 
 ## The LLMsFold Framework
 <p align="center">
-  <img src="images/finalwork.png" alt="LLMsFold workflow">
+  <img src="images/workflow.png" alt="LLMsFold workflow">
 </p>
 
 
