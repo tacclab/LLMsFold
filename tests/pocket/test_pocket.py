@@ -183,18 +183,17 @@ def test_get_p2rank_pocket_returns_unknown_when_file_missing(
 
 
 @pytest.mark.parametrize(
-    ("inputs", "expected_index"),
+    ("pocket_index", "expected_index"),
     [
-        (["0"], 1),
-        (["abc", "5", "1"], 0),
+        (0, 0),
+        (9, 1),
     ],
 )
-def test_select_pocket_interactively(
-    monkeypatch: pytest.MonkeyPatch,
-    inputs: list[str],
+def test_select_pocket(
+    pocket_index: int,
     expected_index: int,
 ) -> None:
-    """Selection helper handles invalid inputs and supports largest-volume shortcut."""
+    """Selection helper supports deterministic index selection with largest fallback."""
 
     pockets = [
         DummyPocket(center=(0.0, 0.0, 0.0), spans=(1.0, 1.0, 1.0)),
@@ -205,12 +204,19 @@ def test_select_pocket_interactively(
         {"pocket_id": 2.0, "center_x": 1.0, "center_y": 1.0, "center_z": 1.0, "volume_approx": 64.0},
     ]
 
-    answers = iter(inputs)
-    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
-
-    selected = pocket._select_pocket_interactively(pockets, pocket_rows)
+    selected = pocket._select_pocket(pockets, pocket_rows, pocket_index=pocket_index)
     assert selected is pockets[expected_index]
 
+
+
+def test_get_binding_pockets_and_residues_uses_p2rank_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default backend uses P2Rank wrapper output."""
+
+    monkeypatch.setattr(pocket, "get_p2rank_pocket", lambda _path: "ALA10_A")
+    center, residues = pocket.get_binding_pockets_and_residues("protein.pdb")
+
+    assert center == "P2Rank"
+    assert residues == "ALA10_A"
 
 def test_get_binding_pockets_and_residues_no_pockets(monkeypatch: pytest.MonkeyPatch) -> None:
     """If DeepChem reports no pockets, function returns no-pocket sentinel values."""
@@ -223,7 +229,7 @@ def test_get_binding_pockets_and_residues_no_pockets(monkeypatch: pytest.MonkeyP
     )
     monkeypatch.setitem(__import__("sys").modules, "deepchem", fake_deepchem)
 
-    center, residues = pocket.get_binding_pockets_and_residues("protein.pdb")
+    center, residues = pocket.get_binding_pockets_and_residues("protein.pdb", backend="deepchem")
 
     assert center == "No pockets found"
     assert residues == "Unknown"
@@ -243,7 +249,7 @@ def test_get_binding_pockets_and_residues_with_mocked_mol(
         dock=types.SimpleNamespace(ConvexHullPocketFinder=finder_cls),
     )
     monkeypatch.setitem(__import__("sys").modules, "deepchem", fake_deepchem)
-    monkeypatch.setattr(pocket, "_select_pocket_interactively", lambda pockets, rows: selected)
+    monkeypatch.setattr(pocket, "_select_pocket", lambda pockets, rows, pocket_index: selected)
 
     atoms = [
         FakeAtom(0, FakeResidueInfo("ALA", 10, "A")),
@@ -259,7 +265,7 @@ def test_get_binding_pockets_and_residues_with_mocked_mol(
     monkeypatch.setattr(pocket.Chem, "MolFromPDBFile", lambda _path: fake_mol)
 
     output_dir = tmp_path / "results"
-    center, residues = pocket.get_binding_pockets_and_residues("protein.pdb", str(output_dir))
+    center, residues = pocket.get_binding_pockets_and_residues("protein.pdb", str(output_dir), backend="deepchem")
 
     assert center == "Center: 1.00, 2.00, 3.00"
     assert residues == "ALA10_A"
@@ -280,10 +286,10 @@ def test_get_binding_pockets_and_residues_handles_unreadable_pdb(
         dock=types.SimpleNamespace(ConvexHullPocketFinder=finder_cls),
     )
     monkeypatch.setitem(__import__("sys").modules, "deepchem", fake_deepchem)
-    monkeypatch.setattr(pocket, "_select_pocket_interactively", lambda pockets, rows: selected)
+    monkeypatch.setattr(pocket, "_select_pocket", lambda pockets, rows, pocket_index: selected)
     monkeypatch.setattr(pocket.Chem, "MolFromPDBFile", lambda _path: None)
 
-    center, residues = pocket.get_binding_pockets_and_residues("protein.pdb", str(tmp_path))
+    center, residues = pocket.get_binding_pockets_and_residues("protein.pdb", str(tmp_path), backend="deepchem")
 
     assert center == "Center: 5.00, 6.00, 7.00"
     assert residues == "Unknown"

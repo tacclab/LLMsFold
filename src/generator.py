@@ -3,6 +3,7 @@
 import asyncio
 import os
 import re
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
 
@@ -11,7 +12,7 @@ from rdkit import Chem
 from rdkit.Chem import FilterCatalog, rdFingerprintGenerator
 
 from src.chemistry import (
-    calculate_reward,
+    calculate_heuristic_score,
     get_max_similarity,
     parse_smiles_from_text,
     passes_lipinski,
@@ -50,6 +51,14 @@ def _get_filter_catalog() -> FilterCatalog.FilterCatalog:
     return FilterCatalog.FilterCatalog(params)
 
 
+@dataclass(frozen=True)
+class ResidueContact:
+    """Pocket residue contact descriptor with explicit chain context."""
+
+    chain_id: str
+    residue_index: int
+
+
 class MoleculeGenerator:
     """Coordinates LLM generation, Boltz scoring, and IP checks."""
 
@@ -71,16 +80,16 @@ class MoleculeGenerator:
         self._llm_temperature = llm_temperature
 
     @staticmethod
-    def _extract_residue_indices(pocket_residues: str | list[str] | None) -> list[int]:
-        """Converts residue descriptors into integer residue indices."""
+    def _extract_residue_contacts(pocket_residues: str | list[str] | None) -> list[ResidueContact]:
+        """Converts residue descriptors into chain-aware residue contacts."""
 
         residue_list = pocket_residues.split(",") if isinstance(pocket_residues, str) else (pocket_residues or [])
-        clean_indices: list[int] = []
+        contacts: list[ResidueContact] = []
         for residue in residue_list:
-            match = re.search(r"\d+", str(residue))
+            match = re.search(r"([A-Z]{3})(\d+)_([A-Za-z0-9])", str(residue).strip())
             if match:
-                clean_indices.append(int(match.group()))
-        return clean_indices
+                contacts.append(ResidueContact(chain_id=match.group(3), residue_index=int(match.group(2))))
+        return contacts
 
     @staticmethod
     def _build_user_prompt(
@@ -107,7 +116,7 @@ class MoleculeGenerator:
         enriched["adj_affinity"] = enriched["Affinity_Prob"].apply(
             lambda value: value if value > ADJ_AFFINITY_THRESHOLD else 0
         )
-        enriched["score"] = enriched.apply(calculate_reward, axis=1)
+        enriched["score"] = enriched.apply(calculate_heuristic_score, axis=1)
         return enriched[enriched["SAS"] <= SAS_SCORE_MAX]
 
     async def run(self, options: PipelineOptions) -> str | None:
@@ -136,15 +145,15 @@ class MoleculeGenerator:
         context_leads = positives.copy()
 
         pocket_residues: str | None = None
-        clean_indices: list[int] = []
+        residue_contacts: list[ResidueContact] = []
         if options.use_pocket_data:
             pocket_coords, pocket_residues = get_binding_pockets_and_residues(
                 options.pdb_path,
                 options.output_dir,
             )
-            clean_indices = self._extract_residue_indices(pocket_residues)
+            residue_contacts = self._extract_residue_contacts(pocket_residues)
             logger.info("Targeting Pocket at %s", pocket_coords)
-            logger.info("Cleaned Residue Indices: %s", clean_indices)
+            logger.info("Pocket residue contacts: %s", residue_contacts)
         else:
             logger.info("Running in Few-Shot mode (Ignoring pocket constraints).")
 
@@ -185,7 +194,7 @@ class MoleculeGenerator:
                 results_df = await self._boltz_client.compute_properties(
                     valid_smiles,
                     options.protein_sequence,
-                    pocket_residues=clean_indices if options.use_pocket_data else None,
+                    pocket_residues=residue_contacts if options.use_pocket_data else None,
                 )
 
                 scored = self._post_process_scores(results_df, target_fps)
@@ -210,7 +219,7 @@ class MoleculeGenerator:
         )
         ip_df = pd.DataFrame([item.to_report_row() for item in patent_checks])
         final_hits = pd.concat([final_hits.reset_index(drop=True), ip_df], axis=1)
-        final_hits = final_hits.sort_values(by=["Is_Novel", "score"], ascending=[False, False])
+        final_hits = final_hits.sort_values(by=["PubChem_Known", "score"], ascending=[True, False])
 
         os.makedirs(options.output_dir, exist_ok=True)
         report_path = os.path.join(options.output_dir, UNIFIED_REPORT_FILENAME)

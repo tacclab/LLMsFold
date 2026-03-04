@@ -1,4 +1,7 @@
 #
+# This file is derived from the RDKit SA_Score implementation by Peter Ertl and
+# Greg Landrum and is redistributed under RDKit's BSD-style license terms.
+
 # calculation of synthetic accessibility score as described in:
 #
 # Estimation of Synthetic Accessibility Score of Drug-like Molecules based on Molecular Complexity and Fragment Contributions

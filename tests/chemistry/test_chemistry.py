@@ -1,5 +1,6 @@
 """Unit tests for chemistry helpers."""
 
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pandas as pd
@@ -73,23 +74,26 @@ def test_passes_lipinski_rejects_none() -> None:
     assert chemistry.passes_lipinski(None) is False
 
 
-def test_extract_sequence_from_pdb_success(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Sequence extraction delegates to RDKit parser/converter."""
+def test_extract_sequence_from_pdb_success(tmp_path: Path) -> None:
+    """Sequence extraction reads canonical residues from SEQRES records."""
 
-    fake_mol = MagicMock(name="pdb_mol")
-    monkeypatch.setattr(chemistry.Chem, "MolFromPDBFile", lambda _path: fake_mol)
-    monkeypatch.setattr(chemistry.Chem, "MolToSequence", lambda _mol: "MKT")
+    pdb_path = tmp_path / "protein.pdb"
+    pdb_path.write_text(
+        "SEQRES   1 A    4  MET LYS THR GLY\nSEQRES   1 B    2  ALA CYS\n",
+        encoding="utf-8",
+    )
 
-    assert chemistry.extract_sequence_from_pdb("protein.pdb") == "MKT"
+    assert chemistry.extract_sequence_from_pdb(str(pdb_path)) == "MKTG"
 
 
-def test_extract_sequence_from_pdb_raises_on_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An unreadable PDB path raises a `ValueError`."""
+def test_extract_sequence_from_pdb_raises_on_missing_seqres(tmp_path: Path) -> None:
+    """A PDB without SEQRES entries raises a `ValueError`."""
 
-    monkeypatch.setattr(chemistry.Chem, "MolFromPDBFile", lambda _path: None)
+    pdb_path = tmp_path / "bad_file.pdb"
+    pdb_path.write_text("HEADER\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="Could not parse PDB file"):
-        chemistry.extract_sequence_from_pdb("bad_file.pdb")
+    with pytest.raises(ValueError, match="No SEQRES records found"):
+        chemistry.extract_sequence_from_pdb(str(pdb_path))
 
 
 def test_get_max_similarity_success(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -41,9 +41,10 @@ def generator_dependencies(monkeypatch: pytest.MonkeyPatch):
     ],
 )
 def test_extract_residue_indices(raw, expected: list[int]) -> None:
-    """Residue index parser extracts numeric indices from multiple input shapes."""
+    """Residue parser extracts numeric indices from multiple input shapes."""
 
-    assert MoleculeGenerator._extract_residue_indices(raw) == expected
+    contacts = MoleculeGenerator._extract_residue_contacts(raw)
+    assert [item.residue_index for item in contacts] == expected
 
 
 @pytest.mark.parametrize(
@@ -76,7 +77,7 @@ def test_post_process_scores_enriches_and_filters(monkeypatch: pytest.MonkeyPatc
     )
 
     monkeypatch.setattr(generator, "get_max_similarity", lambda _smiles, _target_fps: 0.8)
-    monkeypatch.setattr(generator, "calculate_reward", lambda row: row["adj_affinity"] + 0.1)
+    monkeypatch.setattr(generator, "calculate_heuristic_score", lambda row: row["adj_affinity"] + 0.1)
 
     scored = MoleculeGenerator._post_process_scores(source, target_fps=["fp"])
 
@@ -108,7 +109,7 @@ def test_run_full_workflow_generates_report(
     monkeypatch.setattr(generator, "parse_smiles_from_text", lambda _raw: ["CCO"])
     monkeypatch.setattr(generator, "passes_lipinski", lambda _mol: True)
     monkeypatch.setattr(generator, "get_max_similarity", lambda _smiles, _targets: 0.7)
-    monkeypatch.setattr(generator, "calculate_reward", lambda row: float(row["adj_affinity"]))
+    monkeypatch.setattr(generator, "calculate_heuristic_score", lambda row: float(row["adj_affinity"]))
 
     boltz_client = MagicMock()
     boltz_client.compute_properties = AsyncMock(return_value=scored_dataframe)
@@ -132,11 +133,12 @@ def test_run_full_workflow_generates_report(
 
     output = pd.read_csv(report)
     assert list(output["SMILES"]) == ["CCO"]
-    assert "Is_Novel" in output.columns
+    assert "PubChem_Known" in output.columns
 
     boltz_client.compute_properties.assert_awaited_once()
     kwargs = boltz_client.compute_properties.await_args.kwargs
-    assert kwargs["pocket_residues"] == [10, 12]
+    assert [c.chain_id for c in kwargs["pocket_residues"]] == ["A", "A"]
+    assert [c.residue_index for c in kwargs["pocket_residues"]] == [10, 12]
     pubchem_service.check_patents.assert_awaited_once_with("CCO")
 
 

@@ -68,7 +68,7 @@ class MoleculeRecord(BaseModel):
 
 
 class PatentCheckResult(BaseModel):
-    """Patent-related identity/substructure novelty fields from PubChem."""
+    """PubChem presence and patent-like identity/substructure signals."""
 
     pubchem_cid: int | None = None
     identity_patents: int = 0
@@ -81,10 +81,11 @@ class PatentCheckResult(BaseModel):
             A dictionary with report-ready keys.
         """
 
-        is_novel = "Yes" if (self.pubchem_cid is None or self.pubchem_cid == 0) else "No"
+        pubchem_known = "No" if (self.pubchem_cid is None or self.pubchem_cid == 0) else "Yes"
         return {
             "PubChem_CID": self.pubchem_cid if self.pubchem_cid else "N/A",
             "Identity_Patents": self.identity_patents,
             "Substructure_Patents": self.substructure_patents,
-            "Is_Novel": is_novel,
+            "PubChem_Known": pubchem_known,
+            "PubChem_Novelty_Note": "Absence from PubChem does not establish legal novelty.",
         }

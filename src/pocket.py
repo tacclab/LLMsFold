@@ -80,8 +80,8 @@ def _pocket_volume(pocket: Any) -> float:
     )
 
 
-def _select_pocket_interactively(pockets: list[Any], pocket_data: list[dict[str, float]]) -> Any:
-    """Prompts user for pocket selection while preserving previous behavior."""
+def _select_pocket(pockets: list[Any], pocket_data: list[dict[str, float]], pocket_index: int) -> Any:
+    """Selects a pocket index, defaulting to largest volume when index is invalid."""
 
     logger.info("Detected pockets:")
     for row in pocket_data:
@@ -90,21 +90,20 @@ def _select_pocket_interactively(pockets: list[Any], pocket_data: list[dict[str,
             f"{row['center_z']:.2f}), Volume ≈ {row['volume_approx']:.2f} Å³"
         )
 
-    while True:
-        try:
-            choice = int(input(f"\nSelect pocket ID to use (1-{len(pockets)}), or 0 to use largest volume: "))
-            if choice == 0:
-                logger.info("Selected largest volume pocket automatically.")
-                return max(pockets, key=_pocket_volume)
-            if 1 <= choice <= len(pockets):
-                logger.info("Selected pocket %s.", choice)
-                return pockets[choice - 1]
-            logger.warning("Invalid choice. Try again.")
-        except ValueError:
-            logger.warning("Please enter a number.")
+    if 0 <= pocket_index < len(pockets):
+        logger.info("Selected configured pocket index %s.", pocket_index)
+        return pockets[pocket_index]
+
+    logger.info("Pocket index %s out of range, defaulting to largest volume.", pocket_index)
+    return max(pockets, key=_pocket_volume)
 
 
-def get_binding_pockets_and_residues(pdb_path: str, output_dir: str = "results") -> tuple[str, str]:
+def get_binding_pockets_and_residues(
+    pdb_path: str,
+    output_dir: str = "results",
+    backend: str = "p2rank",
+    pocket_index: int = 0,
+) -> tuple[str, str]:
     """Finds pockets and residues within 8A around chosen pocket center.
 
     Args:
@@ -114,6 +113,10 @@ def get_binding_pockets_and_residues(pdb_path: str, output_dir: str = "results")
     Returns:
         Tuple containing pocket center string and nearby residue list string.
     """
+
+    if backend == "p2rank":
+        residues = get_p2rank_pocket(pdb_path)
+        return "P2Rank", residues
 
     # Lazy import avoids importing DeepChem at module import time.
     import deepchem as dc
@@ -139,7 +142,7 @@ def get_binding_pockets_and_residues(pdb_path: str, output_dir: str = "results")
     os.makedirs(output_dir, exist_ok=True)
     pd.DataFrame(pocket_data).to_csv(os.path.join(output_dir, "all_pockets.csv"), index=False)
 
-    best_pocket = _select_pocket_interactively(pockets, pocket_data)
+    best_pocket = _select_pocket(pockets, pocket_data, pocket_index=pocket_index)
     center = np.asarray(best_pocket.center(), dtype=float)
 
     mol = Chem.MolFromPDBFile(pdb_path)

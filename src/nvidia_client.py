@@ -33,11 +33,18 @@ class BoltzClient:
         self.status_url = "https://api.nvcf.nvidia.com/v2/nvcf/pexec/status/{task_id}"
         self._client = http_client or get_cached_http_client()
 
-    async def _poll_task(self, task_id: str, headers: dict[str, str]) -> dict[str, Any] | None:
-        """Polls long-running NVCF task until completion or failure."""
+    async def _poll_task(
+        self,
+        task_id: str,
+        headers: dict[str, str],
+        max_wait_seconds: int = 600,
+    ) -> dict[str, Any] | None:
+        """Polls long-running NVCF task until completion, failure, or timeout."""
 
-        while True:
+        elapsed = 0
+        while elapsed < max_wait_seconds:
             await asyncio.sleep(5)
+            elapsed += 5
             status_response = await self._client.get(
                 self.status_url.format(task_id=task_id),
                 headers=headers,
@@ -48,11 +55,14 @@ class BoltzClient:
             if status_response.status_code >= 400:
                 return None
 
+        logger.error("Boltz2 task %s timed out after %ss", task_id, max_wait_seconds)
+        return None
+
     async def make_nvcf_call(
         self,
         smiles: str,
         sequence: str,
-        pocket_residues: list[int] | None = None,
+        pocket_residues: list[Any] | None = None,
     ) -> BoltzPrediction | None:
         """Submits a Boltz prediction and validates response structure.
 
@@ -83,11 +93,18 @@ class BoltzClient:
 
         constraints: list[dict[str, Any]] = []
         if pocket_residues:
+            contacts: list[dict[str, Any]] = []
+            for residue in pocket_residues:
+                if isinstance(residue, int):
+                    contacts.append({"id": "A", "residue_index": residue})
+                else:
+                    contacts.append({"id": residue.chain_id, "residue_index": residue.residue_index})
+
             constraints.append(
                 {
                     "constraint_type": "pocket",
                     "binder": "L1",
-                    "contacts": [{"id": "A", "residue_index": residue} for residue in pocket_residues],
+                    "contacts": contacts,
                 }
             )
 
@@ -126,7 +143,7 @@ class BoltzClient:
         self,
         smiles_list: list[str],
         sequence: str,
-        pocket_residues: list[int] | None = None,
+        pocket_residues: list[Any] | None = None,
     ) -> pd.DataFrame:
         """Evaluates candidate molecules and returns computed properties.
 
@@ -191,7 +208,7 @@ class BoltzClient:
                 IC50_uM=ic50_um,
                 MolWt=round(Descriptors.MolWt(mol), 2),
                 LogP=round(Descriptors.MolLogP(mol), 2),
-                QED= QED.qed(mol),
+                QED=QED.qed(mol),
                 SAS=round(sascorer.calculateScore(mol), 3),
                 TPSA=round(Descriptors.TPSA(mol), 2),
                 H_Acceptors=int(Descriptors.NumHAcceptors(mol)),
