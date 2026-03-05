@@ -96,10 +96,24 @@ class BoltzClient:
             contacts: list[dict[str, Any]] = []
             for residue in pocket_residues:
                 if isinstance(residue, int):
+                    # Integer residues are assumed to belong to the single declared chain "A".
                     contacts.append({"id": "A", "residue_index": residue})
                 else:
-                    contacts.append({"id": residue.chain_id, "residue_index": residue.residue_index})
+                    # For non-int residues, only accept contacts that map to the declared polymer id "A".
+                    chain_id = getattr(residue, "chain_id", None)
+                    if chain_id is not None and chain_id != "A":
+                        logger.warning(
+                            "Ignoring pocket residue with unsupported chain_id '%s'; only 'A' is declared.",
+                            chain_id,
+                        )
+                        continue
 
+                    residue_index = getattr(residue, "residue_index", None)
+                    if residue_index is None:
+                        logger.warning("Ignoring pocket residue without residue_index: %r", residue)
+                        continue
+
+                    contacts.append({"id": "A", "residue_index": residue_index})
             constraints.append(
                 {
                     "constraint_type": "pocket",
