@@ -53,13 +53,16 @@ def extract_sequence_from_pdb(pdb_path: str) -> str:
     """
 
     chains: dict[str, list[str]] = {}
-    with open(pdb_path, encoding="utf-8") as handle:
-        for line in handle:
-            if not line.startswith("SEQRES"):
-                continue
-            chain_id = line[11].strip() or "A"
-            residues = line[19:].strip().split()
-            chains.setdefault(chain_id, []).extend(residues)
+    try:
+        with open(pdb_path, encoding="utf-8") as handle:
+            for line in handle:
+                if not line.startswith("SEQRES"):
+                    continue
+                chain_id = line[11].strip() or "A"
+                residues = line[19:].strip().split()
+                chains.setdefault(chain_id, []).extend(residues)
+    except OSError as exc:
+        raise ValueError(f"Could not open or read PDB file: {pdb_path}") from exc
 
     if not chains:
         raise ValueError(f"No SEQRES records found in {pdb_path}")
