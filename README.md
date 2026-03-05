@@ -119,7 +119,7 @@ Primary artifact: `results/unified_report.csv`
 Important columns include:
 - Activity/confidence: `Affinity_Prob`, `pIC50`, `IC50_uM`, `pTM`, `ipTM`, `pLDDT`
 - Drug-like properties: `MolWt`, `LogP`, `QED`, `SAS`, `TPSA`, `H_Acceptors`, `H_Donors`
-- Ranking/novelty: `MaxSim`, `adj_affinity`, `score`, `PubChem_CID`, `Is_Novel`
+- Ranking/novelty: `MaxSim`, `adj_affinity`, `score`, `PubChem_CID`, `PubChem_Known`
 
 ## Documentation
 - Docs index: `doc/README.md`

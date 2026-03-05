@@ -37,14 +37,14 @@ def test_pipeline_options_constraints(max_iterations: int, max_samples: int, is_
 
 
 @pytest.mark.parametrize(
-    ("cid", "expected_novel", "expected_cid_field"),
+    ("cid", "expected_known", "expected_cid_field"),
     [
-        (None, "Yes", "N/A"),
-        (0, "Yes", "N/A"),
-        (12345, "No", 12345),
+        (None, "No", "N/A"),
+        (0, "No", "N/A"),
+        (12345, "Yes", 12345),
     ],
 )
-def test_patent_check_to_report_row(cid: int | None, expected_novel: str, expected_cid_field: int | str) -> None:
+def test_patent_check_to_report_row(cid: int | None, expected_known: str, expected_cid_field: int | str) -> None:
     """Patent report rows are normalized for report-friendly fields."""
 
     result = PatentCheckResult(pubchem_cid=cid, identity_patents=2, substructure_patents=4)
@@ -53,7 +53,8 @@ def test_patent_check_to_report_row(cid: int | None, expected_novel: str, expect
     assert row["PubChem_CID"] == expected_cid_field
     assert row["Identity_Patents"] == 2
     assert row["Substructure_Patents"] == 4
-    assert row["Is_Novel"] == expected_novel
+    assert row["PubChem_Known"] == expected_known
+    assert "legal novelty" in row["PubChem_Novelty_Note"]
 
 
 def test_boltz_prediction_ignores_extra_fields() -> None:

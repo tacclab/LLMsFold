@@ -1,5 +1,7 @@
 """Chemistry and text parsing utility functions."""
 
+import ast
+import json
 import re
 from typing import Any, Sequence
 
@@ -7,9 +9,38 @@ import pandas as pd
 from rdkit import Chem, DataStructs
 from rdkit.Chem import Descriptors, rdFingerprintGenerator
 
+from src.core.logging import get_logger
+
+logger = get_logger(__name__)
+
+_PDB_RESIDUE_TO_ONE_LETTER = {
+    "ALA": "A",
+    "ARG": "R",
+    "ASN": "N",
+    "ASP": "D",
+    "CYS": "C",
+    "GLN": "Q",
+    "GLU": "E",
+    "GLY": "G",
+    "HIS": "H",
+    "ILE": "I",
+    "LEU": "L",
+    "LYS": "K",
+    "MET": "M",
+    "PHE": "F",
+    "PRO": "P",
+    "SER": "S",
+    "THR": "T",
+    "TRP": "W",
+    "TYR": "Y",
+    "VAL": "V",
+    "SEC": "U",
+    "PYL": "O",
+}
+
 
 def extract_sequence_from_pdb(pdb_path: str) -> str:
-    """Extracts a protein sequence from a PDB file.
+    """Extracts a protein sequence from PDB `SEQRES` records.
 
     Args:
         pdb_path: Path to the PDB file.
@@ -18,23 +49,36 @@ def extract_sequence_from_pdb(pdb_path: str) -> str:
         The primary sequence encoded in the structure.
 
     Raises:
-        ValueError: If the PDB cannot be parsed by RDKit.
+        ValueError: If no SEQRES records can be parsed.
     """
 
-    mol = Chem.MolFromPDBFile(pdb_path)
-    if not mol:
-        raise ValueError(f"Could not parse PDB file at {pdb_path}")
-    return Chem.MolToSequence(mol)
+    chains: dict[str, list[str]] = {}
+    try:
+        with open(pdb_path, encoding="utf-8") as handle:
+            for line in handle:
+                if not line.startswith("SEQRES"):
+                    continue
+                chain_id = line[11].strip() or "A"
+                residues = line[19:].strip().split()
+                chains.setdefault(chain_id, []).extend(residues)
+    except OSError as exc:
+        raise ValueError(f"Could not open or read PDB file: {pdb_path}") from exc
+
+    if not chains:
+        raise ValueError(f"No SEQRES records found in {pdb_path}")
+
+    first_chain = sorted(chains.keys())[0]
+    return "".join(_PDB_RESIDUE_TO_ONE_LETTER.get(code, "X") for code in chains[first_chain])
 
 
-def calculate_reward(row: pd.Series) -> float:
-    """Computes RL-style score with over-similarity penalty.
+def calculate_heuristic_score(row: pd.Series) -> float:
+    """Computes heuristic ranking score with over-similarity penalty.
 
     Args:
         row: A dataframe row with `adj_affinity` and `MaxSim`.
 
     Returns:
-        Reward value used to rank candidates.
+        Score value used to rank candidates.
     """
 
     affinity = float(row["adj_affinity"])
@@ -88,7 +132,7 @@ def get_max_similarity(smiles: str, target_fps: Sequence[Any]) -> float:
 
 
 def parse_smiles_from_text(raw_text: str) -> list[str]:
-    """Extracts SMILES-like strings from an LLM Python-list response.
+    """Extracts SMILES candidates from varied LLM response formats.
 
     Args:
         raw_text: Raw model output string.
@@ -97,7 +141,32 @@ def parse_smiles_from_text(raw_text: str) -> list[str]:
         List of SMILES candidates parsed from quoted list entries.
     """
 
-    list_match = re.search(r"\[\s*['\"](.*?)['\"]\s*\]", raw_text, re.DOTALL)
+    smiles_pattern = re.compile(r"['\"]([A-Za-z0-9@+\-\[\]\(\)\\\/%=#$\.]{5,})['\"]")
+    clean_text = re.sub(r"```[a-zA-Z]*\n?", "", raw_text).replace("```", "").strip()
+
+    list_match = re.search(r"\[.*?\]", clean_text, re.DOTALL)
     if list_match:
-        return re.findall(r"['\"]([a-zA-Z0-9@+\-\[\]\(\)\\\/%=#$]{5,})['\"]", raw_text)
+        try:
+            candidates = ast.literal_eval(list_match.group())
+            if isinstance(candidates, list):
+                return [item for item in candidates if isinstance(item, str) and len(item) >= 5]
+        except (ValueError, SyntaxError):
+            pass
+
+    try:
+        payload = json.loads(clean_text)
+        if isinstance(payload, list):
+            return [item for item in payload if isinstance(item, str) and len(item) >= 5]
+    except json.JSONDecodeError:
+        pass
+
+    matches = smiles_pattern.findall(clean_text)
+    if matches:
+        return matches
+
+    logger.warning("Could not parse any SMILES from LLM output: %s", clean_text[:200])
     return []
+
+
+# Backward-compatible alias for existing imports/tests.
+calculate_reward = calculate_heuristic_score
