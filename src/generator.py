@@ -219,7 +219,18 @@ class MoleculeGenerator:
         )
         ip_df = pd.DataFrame([item.to_report_row() for item in patent_checks])
         final_hits = pd.concat([final_hits.reset_index(drop=True), ip_df], axis=1)
-        final_hits = final_hits.sort_values(by=["PubChem_Known", "score"], ascending=[True, False])
+        final_hits = (
+            final_hits.assign(
+                _pubchem_known_rank=final_hits["PubChem_Known"]
+                .astype(str)
+                .str.strip()
+                .str.lower()
+                .map({"no": 0, "yes": 1})
+                .fillna(1)
+            )
+            .sort_values(by=["_pubchem_known_rank", "score"], ascending=[True, False])
+            .drop(columns=["_pubchem_known_rank"])
+        )
 
         os.makedirs(options.output_dir, exist_ok=True)
         report_path = os.path.join(options.output_dir, UNIFIED_REPORT_FILENAME)
