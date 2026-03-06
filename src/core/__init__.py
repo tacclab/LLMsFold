@@ -1,4 +1,4 @@
-"""Core shared runtime modules (constants, config, logging)."""
+"""Core shared runtime modules (constants, config, exceptions, logging)."""
 
 from src.core.config import AppSettings, GeneratorSettings, get_generator_settings, get_settings
 from src.core.constants import (
@@ -18,12 +18,30 @@ from src.core.constants import (
     SEED_SMILES_LIMIT,
     UNIFIED_REPORT_FILENAME,
 )
+from src.core.exceptions import (
+    ConfigurationError,
+    LLMsFoldError,
+    PocketDetectionError,
+    PubChemError,
+    PubChemHTTPStatusError,
+    PubChemPayloadError,
+    PubChemPollingTimeoutError,
+    PubChemTransportError,
+    SequenceExtractionError,
+)
 from src.core.logging import configure_logging, get_logger
+from src.core.messages import (
+    invalid_runtime_options,
+    missing_environment_configuration,
+    missing_required_setting,
+    pdb_file_not_found,
+)
 
 __all__ = [
     "ADJ_AFFINITY_THRESHOLD",
     "AppSettings",
     "CONTEXT_LEADS_WINDOW",
+    "ConfigurationError",
     "DEFAULT_FEW_SHOT_CSV",
     "DEFAULT_LLM_MODEL",
     "DEFAULT_LLM_TEMPERATURE",
@@ -34,9 +52,21 @@ __all__ = [
     "DEFAULT_OUTPUT_DIR",
     "DEFAULT_PDB_FILE",
     "GeneratorSettings",
+    "invalid_runtime_options",
+    "LLMsFoldError",
+    "missing_environment_configuration",
+    "missing_required_setting",
     "MORGAN_FINGERPRINT_RADIUS",
+    "pdb_file_not_found",
+    "PocketDetectionError",
+    "PubChemError",
+    "PubChemHTTPStatusError",
+    "PubChemPayloadError",
+    "PubChemPollingTimeoutError",
+    "PubChemTransportError",
     "SAS_SCORE_MAX",
     "SEED_SMILES_LIMIT",
+    "SequenceExtractionError",
     "UNIFIED_REPORT_FILENAME",
     "configure_logging",
     "get_generator_settings",

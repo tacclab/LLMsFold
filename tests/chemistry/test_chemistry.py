@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from src import chemistry
+from src.core.exceptions import SequenceExtractionError
 
 
 @pytest.mark.parametrize(
@@ -17,11 +18,11 @@ from src import chemistry
         (0.0, 0.99, 0.0),
     ],
 )
-def test_calculate_reward(adj_affinity: float, max_sim: float, expected: float) -> None:
-    """Reward penalizes over-similar compounds when MaxSim exceeds 0.9."""
+def test_calculate_heuristic_score(adj_affinity: float, max_sim: float, expected: float) -> None:
+    """Heuristic score penalizes over-similar compounds when MaxSim exceeds 0.9."""
 
     row = pd.Series({"adj_affinity": adj_affinity, "MaxSim": max_sim})
-    assert chemistry.calculate_reward(row) == pytest.approx(expected)
+    assert chemistry.calculate_heuristic_score(row) == pytest.approx(expected)
 
 
 @pytest.mark.parametrize(
@@ -29,6 +30,7 @@ def test_calculate_reward(adj_affinity: float, max_sim: float, expected: float) 
     [
         ("['CCOCC', 'CCNCC']", ["CCOCC", "CCNCC"]),
         ('Result: ["C1=CC=CC=C1"]', ["C1=CC=CC=C1"]),
+        ('{"molecules": ["CCO", "invalid", {"SMILES": "CCN"}]}', ["CCO", "CCN"]),
         ("No list here", []),
         ("['bad']", []),
     ],
@@ -86,13 +88,34 @@ def test_extract_sequence_from_pdb_success(tmp_path: Path) -> None:
     assert chemistry.extract_sequence_from_pdb(str(pdb_path)) == "MKTG"
 
 
-def test_extract_sequence_from_pdb_raises_on_missing_seqres(tmp_path: Path) -> None:
-    """A PDB without SEQRES entries raises a `ValueError`."""
+def test_extract_sequence_from_pdb_falls_back_to_atom_records(tmp_path: Path) -> None:
+    """Resolved residues are used when `SEQRES` records are unavailable."""
+
+    pdb_path = tmp_path / "resolved_only.pdb"
+    pdb_path.write_text(
+        "\n".join(
+            [
+                "ATOM      1  N   MET A   1      10.000  11.000  12.000  1.00 20.00           N",
+                "ATOM      2  CA  MET A   1      10.500  11.500  12.500  1.00 20.00           C",
+                "ATOM      3  N   LYS A   2      11.000  12.000  13.000  1.00 20.00           N",
+                "ATOM      4  CA  LYS A   2      11.500  12.500  13.500  1.00 20.00           C",
+                "ATOM      5  N   THR B   1      12.000  13.000  14.000  1.00 20.00           N",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert chemistry.extract_sequence_from_pdb(str(pdb_path)) == "MK"
+
+
+def test_extract_sequence_from_pdb_raises_on_missing_sequence_records(tmp_path: Path) -> None:
+    """A PDB without `SEQRES` or `ATOM` entries raises a domain-specific error."""
 
     pdb_path = tmp_path / "bad_file.pdb"
     pdb_path.write_text("HEADER\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="No SEQRES records found"):
+    with pytest.raises(SequenceExtractionError, match="No SEQRES or ATOM residue records found"):
         chemistry.extract_sequence_from_pdb(str(pdb_path))
 
 
@@ -102,9 +125,15 @@ def test_get_max_similarity_success(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_generator = MagicMock(name="fingerprint_generator")
     fake_generator.GetFingerprint.return_value = "candidate_fp"
 
-    monkeypatch.setattr(chemistry.Chem, "MolFromSmiles", lambda smiles: object() if smiles == "CCO" else None)
-    monkeypatch.setattr(chemistry.rdFingerprintGenerator, "GetMorganGenerator", lambda radius: fake_generator)
-    monkeypatch.setattr(chemistry.DataStructs, "BulkTanimotoSimilarity", lambda _fp, _targets: [0.12, 0.78])
+    monkeypatch.setattr(
+        chemistry.Chem, "MolFromSmiles", lambda smiles: object() if smiles == "CCO" else None
+    )
+    monkeypatch.setattr(
+        chemistry.rdFingerprintGenerator, "GetMorganGenerator", lambda radius: fake_generator
+    )
+    monkeypatch.setattr(
+        chemistry.DataStructs, "BulkTanimotoSimilarity", lambda _fp, _targets: [0.12, 0.78]
+    )
 
     assert chemistry.get_max_similarity("CCO", ["t1", "t2"]) == pytest.approx(0.78)
     assert chemistry.get_max_similarity("invalid", ["t1", "t2"]) == 0.0
@@ -117,7 +146,9 @@ def test_get_max_similarity_returns_zero_on_error(monkeypatch: pytest.MonkeyPatc
     fake_generator.GetFingerprint.return_value = "candidate_fp"
 
     monkeypatch.setattr(chemistry.Chem, "MolFromSmiles", lambda _smiles: object())
-    monkeypatch.setattr(chemistry.rdFingerprintGenerator, "GetMorganGenerator", lambda radius: fake_generator)
+    monkeypatch.setattr(
+        chemistry.rdFingerprintGenerator, "GetMorganGenerator", lambda radius: fake_generator
+    )
 
     def _raise(*_args, **_kwargs):
         raise RuntimeError("boom")

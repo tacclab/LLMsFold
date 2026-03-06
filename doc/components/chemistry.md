@@ -5,7 +5,7 @@ Provides chemistry-focused utility functions used by generator and CLI.
 
 ## Functions
 - `extract_sequence_from_pdb(pdb_path)`
-- `calculate_reward(row)`
+- `calculate_heuristic_score(row)`
 - `passes_lipinski(mol)`
 - `get_max_similarity(smiles, target_fps)`
 - `parse_smiles_from_text(raw_text)`
@@ -17,7 +17,7 @@ flowchart LR
     B --> C[Candidate SMILES]
     C --> D[get_max_similarity vs seeds]
     C --> E[passes_lipinski]
-    D --> F[calculate_reward]
+    D --> F[calculate_heuristic_score]
     E --> F
 ```
 

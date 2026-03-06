@@ -2,16 +2,18 @@
 
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pandas as pd
 import pytest
+
+if TYPE_CHECKING:
+    from src.schemas import PipelineOptions
 
 # Ensure local `src/` imports resolve when tests run from project root.
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-
-from src.schemas import PipelineOptions
 
 
 @pytest.fixture
@@ -24,13 +26,15 @@ def few_shot_csv(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def pipeline_options(tmp_path: Path, few_shot_csv: Path) -> PipelineOptions:
+def pipeline_options(tmp_path: Path, few_shot_csv: Path) -> "PipelineOptions":
     """Builds default validated options for workflow-oriented tests."""
 
+    from src.schemas import PipelineOptions
+
     return PipelineOptions(
-        pdb_path=str(tmp_path / "protein.pdb"),
-        few_shot_csv=str(few_shot_csv),
-        output_dir=str(tmp_path / "results"),
+        pdb_path=tmp_path / "protein.pdb",
+        few_shot_csv=few_shot_csv,
+        output_dir=tmp_path / "results",
         protein_sequence="MKT",
         max_iterations=1,
         max_samples=2,
