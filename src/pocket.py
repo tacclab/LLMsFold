@@ -4,43 +4,51 @@ import glob
 import os
 import stat
 import subprocess
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
 from rdkit import Chem
 
+from src.core.constants import (
+    DEFAULT_DEEPCHEM_POCKET_PAD,
+    DEFAULT_P2RANK_OUTPUT_DIRNAME,
+    DEFAULT_POCKET_CONTACT_DISTANCE,
+)
+from src.core.exceptions import PocketDetectionError
 from src.core.logging import get_logger
+from src.core.messages import p2rank_executable_not_found
 
 logger = get_logger(__name__)
 
 
-def setup_p2rank() -> str:
+def setup_p2rank(search_root: str | Path | None = None) -> str:
     """Locates the `prank` executable and ensures execute permissions.
 
     Returns:
         Absolute path to the `prank` executable.
 
     Raises:
-        FileNotFoundError: If no executable is found in project paths.
+        PocketDetectionError: If no executable is found in project paths.
     """
 
-    base_dir = os.getcwd()
-    script_path = os.path.join(base_dir, "prank", "prank")
+    base_dir = Path(search_root) if search_root is not None else Path.cwd()
+    script_path = base_dir / "prank" / "prank"
 
-    if not os.path.exists(script_path):
-        existing = glob.glob(os.path.join(base_dir, "p2rank*", "prank"), recursive=True)
+    if not script_path.exists():
+        existing = glob.glob(str(base_dir / "p2rank*" / "prank"), recursive=True)
         if existing:
-            script_path = existing[0]
+            script_path = Path(existing[0])
         else:
-            raise FileNotFoundError("P2Rank executable `prank` not found in project root.")
+            raise PocketDetectionError(p2rank_executable_not_found(base_dir))
 
     current_mode = os.stat(script_path).st_mode
     os.chmod(script_path, current_mode | stat.S_IEXEC)
-    return script_path
+    return str(script_path)
 
 
-def get_p2rank_pocket(pdb_path: str) -> str:
+def get_p2rank_pocket(pdb_path: str | Path, output_dir: str | Path = ".") -> str:
     """Runs P2Rank and returns top predicted pocket residue identifiers.
 
     Args:
@@ -51,16 +59,25 @@ def get_p2rank_pocket(pdb_path: str) -> str:
     """
 
     p2rank_executable = setup_p2rank()
-    output_dir = os.path.abspath("p2rank_output")
-    os.makedirs(output_dir, exist_ok=True)
+    p2rank_output_dir = Path(output_dir) / DEFAULT_P2RANK_OUTPUT_DIRNAME
+    p2rank_output_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info("Running P2Rank analysis on %s...", pdb_path)
-    cmd = [p2rank_executable, "predict", "-f", pdb_path, "-o", output_dir, "-visualizations", "0"]
+    cmd = [
+        p2rank_executable,
+        "predict",
+        "-f",
+        os.fspath(pdb_path),
+        "-o",
+        os.fspath(p2rank_output_dir),
+        "-visualizations",
+        "0",
+    ]
     subprocess.run(cmd, check=True, capture_output=True)
 
-    pdb_filename = os.path.basename(pdb_path)
-    pred_file = os.path.join(output_dir, f"{pdb_filename}_predictions.csv")
-    if not os.path.exists(pred_file):
+    pdb_filename = Path(pdb_path).name
+    pred_file = p2rank_output_dir / f"{pdb_filename}_predictions.csv"
+    if not pred_file.exists():
         return "Unknown Pocket"
 
     pocket_df = pd.read_csv(pred_file)
@@ -80,14 +97,20 @@ def _pocket_volume(pocket: Any) -> float:
     )
 
 
-def _select_pocket(pockets: list[Any], pocket_data: list[dict[str, float]], pocket_index: int) -> Any:
+def _select_pocket(
+    pockets: list[Any], pocket_data: list[dict[str, float]], pocket_index: int
+) -> Any:
     """Selects a pocket index, defaulting to largest volume when index is invalid."""
 
-    logger.info("Detected pockets:")
+    logger.info("Detected %s candidate pockets", len(pocket_data))
     for row in pocket_data:
-        logger.info(
-            f"[{int(row['pocket_id'])}] Center: ({row['center_x']:.2f}, {row['center_y']:.2f}, "
-            f"{row['center_z']:.2f}), Volume ≈ {row['volume_approx']:.2f} Å³"
+        logger.debug(
+            "Pocket %s center=(%.2f, %.2f, %.2f) volume≈%.2f A^3",
+            int(row["pocket_id"]),
+            row["center_x"],
+            row["center_y"],
+            row["center_z"],
+            row["volume_approx"],
         )
 
     if 0 <= pocket_index < len(pockets):
@@ -99,8 +122,8 @@ def _select_pocket(pockets: list[Any], pocket_data: list[dict[str, float]], pock
 
 
 def get_binding_pockets_and_residues(
-    pdb_path: str,
-    output_dir: str = "results",
+    pdb_path: str | Path,
+    output_dir: str | Path = "results",
     backend: str = "p2rank",
     pocket_index: int = 0,
 ) -> tuple[str, str]:
@@ -115,13 +138,13 @@ def get_binding_pockets_and_residues(
     """
 
     if backend == "p2rank":
-        residues = get_p2rank_pocket(pdb_path)
+        residues = get_p2rank_pocket(pdb_path, output_dir=output_dir)
         return "P2Rank", residues
 
     # Lazy import avoids importing DeepChem at module import time.
     import deepchem as dc
 
-    finder = dc.dock.ConvexHullPocketFinder(pad=5.0)
+    finder = dc.dock.ConvexHullPocketFinder(pad=DEFAULT_DEEPCHEM_POCKET_PAD)
     pockets = finder.find_pockets(pdb_path)
     if not pockets:
         return "No pockets found", "Unknown"
@@ -145,7 +168,7 @@ def get_binding_pockets_and_residues(
     best_pocket = _select_pocket(pockets, pocket_data, pocket_index=pocket_index)
     center = np.asarray(best_pocket.center(), dtype=float)
 
-    mol = Chem.MolFromPDBFile(pdb_path)
+    mol = Chem.MolFromPDBFile(os.fspath(pdb_path))
     if mol is None:
         return f"Center: {center[0]:.2f}, {center[1]:.2f}, {center[2]:.2f}", "Unknown"
 
@@ -155,7 +178,7 @@ def get_binding_pockets_and_residues(
     for atom in mol.GetAtoms():
         position = conformer.GetAtomPosition(atom.GetIdx())
         distance = np.linalg.norm(np.array([position.x, position.y, position.z]) - center)
-        if distance > 8.0:
+        if distance > DEFAULT_POCKET_CONTACT_DISTANCE:
             continue
 
         info = atom.GetPDBResidueInfo()

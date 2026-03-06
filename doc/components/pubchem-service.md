@@ -5,7 +5,6 @@ Adds novelty and patent-related indicators to final candidate molecules.
 
 ## Public API
 - `PubChemService.check_patents(smiles)`
-- `check_pubchem_patents(smiles)` (legacy tuple wrapper)
 
 ## Request Flow
 ```mermaid

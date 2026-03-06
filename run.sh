@@ -1,8 +1,30 @@
-#!/bin/bash
+#!/bin/sh
 
-# Load environment variables from .env 
+print_banner() {
+cat <<'EOF'
++------------------------------------------------------------------------------+
+|  _      _     __  __      ______    _     _                                 |
+| | |    | |   |  \/  |    |  ____|  | |   | |                                |
+| | |    | |   | \  / |___ | |__ ___ | | __| |                                |
+| | |    | |   | |\/| / __||  __/ _ \| |/ _` |                                |
+| | |____| |___| |  | \__ \| | | (_) | | (_| |                                |
+| |______|_____|_|  |_|___/|_|  \___/|_|\__,_|                                |
+|                                                                              |
+|                                  LLMsFold                                    |
++------------------------------------------------------------------------------+
+Authors: W. W. Waththe Liyanage, Fabio Bove, Dario Righelli, Salvatore Romano
+         Rosa Visone, Marilena V. Iorio, Pietro Lio, Cristian Taccioli
+EOF
+}
+
+print_banner
+export LLMSFOLD_BANNER_SHOWN=1
+
+# Load environment variables from .env.
 if [ -f .env ]; then
-    export $(cat .env | xargs)
+    set -a
+    . ./.env
+    set +a
     echo "Successfully loaded configuration from .env"
 else
     echo "Warning: .env file not found. Ensure keys are exported manually."
@@ -15,8 +37,8 @@ if [ -z "$GROQ_API_KEY" ] || [ -z "$NVIDIA_API_KEY" ]; then
 fi
 
 # Set defaults if not provided in .env
-PDB_PATH=${PDB_FILE:-"data/target.pdb"}
-CSV_PATH=${FEW_SHOT_CSV:-"data/few_shot_smiles1.csv"}
+PDB_PATH=${PDB_FILE:-"data/acvr1_R206H_clean.pdb"}
+CSV_PATH=${FEW_SHOT_CSV:-"data/few_shot_smiles_patent.csv"}
 OUT_DIR=${OUTPUT_DIR:-"results"}
 
 echo "------------------------------------------------"

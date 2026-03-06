@@ -1,6 +1,7 @@
 """Tests for cached client factories."""
 
 import asyncio
+from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -9,7 +10,7 @@ from src.clients import factory
 
 
 @pytest.fixture(autouse=True)
-def clear_factory_caches() -> None:
+def clear_factory_caches() -> Iterator[None]:
     """Ensures each test starts with clean lru caches."""
 
     factory.get_cached_http_client.cache_clear()
@@ -80,7 +81,9 @@ def test_close_cached_clients_closes_open_http_client(monkeypatch: pytest.Monkey
     assert factory.get_cached_groq_client.cache_info().currsize == 0
 
 
-def test_close_cached_clients_skips_already_closed_http_client(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_close_cached_clients_skips_already_closed_http_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Already closed clients should not be closed again."""
 
     fake_client = MagicMock(name="async_client")

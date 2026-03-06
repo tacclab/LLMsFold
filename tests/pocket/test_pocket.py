@@ -9,12 +9,15 @@ from unittest.mock import MagicMock
 import pytest
 
 from src import pocket
+from src.core.exceptions import PocketDetectionError
 
 
 class DummyPocket:
     """Simple pocket object matching the shape expected by pocket helpers."""
 
-    def __init__(self, center: tuple[float, float, float], spans: tuple[float, float, float]) -> None:
+    def __init__(
+        self, center: tuple[float, float, float], spans: tuple[float, float, float]
+    ) -> None:
         self._center = center
         sx, sy, sz = spans
         self.x_range = (0.0, sx)
@@ -122,7 +125,9 @@ def test_setup_p2rank_uses_project_prank_and_sets_executable(
     assert os.stat(prank_path).st_mode & stat.S_IEXEC
 
 
-def test_setup_p2rank_falls_back_to_glob_search(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_setup_p2rank_falls_back_to_glob_search(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """When `prank/prank` is missing, glob fallback is used."""
 
     alt = tmp_path / "p2rank-v2.5" / "prank"
@@ -136,15 +141,17 @@ def test_setup_p2rank_falls_back_to_glob_search(tmp_path: Path, monkeypatch: pyt
 
 
 def test_setup_p2rank_raises_when_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Missing P2Rank executable raises `FileNotFoundError`."""
+    """Missing P2Rank executable raises a domain-specific pocket error."""
 
     monkeypatch.chdir(tmp_path)
 
-    with pytest.raises(FileNotFoundError, match="prank"):
+    with pytest.raises(PocketDetectionError, match="P2Rank executable"):
         pocket.setup_p2rank()
 
 
-def test_get_p2rank_pocket_reads_residue_ids(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_p2rank_pocket_reads_residue_ids(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Top-ranked residue ids are returned from P2Rank prediction CSV."""
 
     pdb_path = tmp_path / "target.pdb"
@@ -201,22 +208,37 @@ def test_select_pocket(
     ]
     pocket_rows = [
         {"pocket_id": 1.0, "center_x": 0.0, "center_y": 0.0, "center_z": 0.0, "volume_approx": 1.0},
-        {"pocket_id": 2.0, "center_x": 1.0, "center_y": 1.0, "center_z": 1.0, "volume_approx": 64.0},
+        {
+            "pocket_id": 2.0,
+            "center_x": 1.0,
+            "center_y": 1.0,
+            "center_z": 1.0,
+            "volume_approx": 64.0,
+        },
     ]
 
     selected = pocket._select_pocket(pockets, pocket_rows, pocket_index=pocket_index)
     assert selected is pockets[expected_index]
 
 
-
-def test_get_binding_pockets_and_residues_uses_p2rank_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_binding_pockets_and_residues_uses_p2rank_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Default backend uses P2Rank wrapper output."""
 
-    monkeypatch.setattr(pocket, "get_p2rank_pocket", lambda _path: "ALA10_A")
+    calls: list[str] = []
+
+    def _fake_get_p2rank_pocket(_path: str, output_dir: str = ".") -> str:
+        calls.append(output_dir)
+        return "ALA10_A"
+
+    monkeypatch.setattr(pocket, "get_p2rank_pocket", _fake_get_p2rank_pocket)
     center, residues = pocket.get_binding_pockets_and_residues("protein.pdb")
 
     assert center == "P2Rank"
     assert residues == "ALA10_A"
+    assert calls == ["results"]
+
 
 def test_get_binding_pockets_and_residues_no_pockets(monkeypatch: pytest.MonkeyPatch) -> None:
     """If DeepChem reports no pockets, function returns no-pocket sentinel values."""
@@ -265,7 +287,9 @@ def test_get_binding_pockets_and_residues_with_mocked_mol(
     monkeypatch.setattr(pocket.Chem, "MolFromPDBFile", lambda _path: fake_mol)
 
     output_dir = tmp_path / "results"
-    center, residues = pocket.get_binding_pockets_and_residues("protein.pdb", str(output_dir), backend="deepchem")
+    center, residues = pocket.get_binding_pockets_and_residues(
+        "protein.pdb", str(output_dir), backend="deepchem"
+    )
 
     assert center == "Center: 1.00, 2.00, 3.00"
     assert residues == "ALA10_A"
@@ -289,7 +313,9 @@ def test_get_binding_pockets_and_residues_handles_unreadable_pdb(
     monkeypatch.setattr(pocket, "_select_pocket", lambda pockets, rows, pocket_index: selected)
     monkeypatch.setattr(pocket.Chem, "MolFromPDBFile", lambda _path: None)
 
-    center, residues = pocket.get_binding_pockets_and_residues("protein.pdb", str(tmp_path), backend="deepchem")
+    center, residues = pocket.get_binding_pockets_and_residues(
+        "protein.pdb", str(tmp_path), backend="deepchem"
+    )
 
     assert center == "Center: 5.00, 6.00, 7.00"
     assert residues == "Unknown"

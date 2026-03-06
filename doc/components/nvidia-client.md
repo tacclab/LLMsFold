@@ -29,6 +29,7 @@ flowchart TD
 
 ## Behavior Notes
 - Polling checks every 5 seconds until completion/error.
+- HTTP `429 Too Many Requests` responses are retried with a tenacity backoff policy.
 - Missing `nvcf-reqid` on `202` is treated as failure (`None`).
 - Schema validation failures are safely downgraded to `None`.
 - `compute_properties` skips invalid SMILES and failed predictions.

@@ -15,9 +15,12 @@ dependencies = [
     "pydantic-settings>=2.10.1",
     "prody>=2.6.1",
     "rdkit>=2025.9.3",
+    "tenacity",
     "torch>=2.9.1",
     "torch-geometric>=2.7.0",
     "transformers>=4.57.3",
+    "tqdm>=4.67.1",
+    "neoralab-sascorer>=0.1.5",
 ]
 
 [dependency-groups]
@@ -31,7 +34,6 @@ dev = [
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-exclude = ["sascorer.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B"]

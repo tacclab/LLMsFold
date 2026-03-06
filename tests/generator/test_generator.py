@@ -8,7 +8,10 @@ import pandas as pd
 import pytest
 
 from src import generator
-from src.generator import MoleculeGenerator, generate_molecules_unified
+from src.core.config import GeneratorSettings
+from src.core.exceptions import PocketDetectionError
+from src.generator import MoleculeGenerator
+from src.prompt import build_user_prompt
 from src.schemas import PatentCheckResult
 
 
@@ -62,7 +65,7 @@ def test_build_user_prompt_variants(
 ) -> None:
     """Prompt builder emits the correct template per workflow mode."""
 
-    prompt = MoleculeGenerator._build_user_prompt(use_pocket, residues, "CCO", max_samples)
+    prompt = build_user_prompt(use_pocket, residues, "CCO", max_samples)
     assert expected_fragment in prompt
 
 
@@ -77,13 +80,42 @@ def test_post_process_scores_enriches_and_filters(monkeypatch: pytest.MonkeyPatc
     )
 
     monkeypatch.setattr(generator, "get_max_similarity", lambda _smiles, _target_fps: 0.8)
-    monkeypatch.setattr(generator, "calculate_heuristic_score", lambda row: row["adj_affinity"] + 0.1)
+    monkeypatch.setattr(
+        generator, "calculate_heuristic_score", lambda row: row["adj_affinity"] + 0.1
+    )
 
     scored = MoleculeGenerator._post_process_scores(source, target_fps=["fp"])
 
     assert list(scored["SMILES"]) == ["CCO"]
     assert scored.iloc[0]["adj_affinity"] == pytest.approx(0.7)
     assert scored.iloc[0]["score"] == pytest.approx(0.8)
+
+
+def test_post_process_scores_accepts_custom_thresholds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Score thresholds should be overrideable from runtime settings."""
+
+    source = pd.DataFrame(
+        [
+            {"SMILES": "CCO", "Affinity_Prob": 0.7, "SAS": 6.5},
+            {"SMILES": "CCN", "Affinity_Prob": 0.95, "SAS": 5.5},
+        ]
+    )
+
+    monkeypatch.setattr(generator, "get_max_similarity", lambda _smiles, _target_fps: 0.8)
+    monkeypatch.setattr(generator, "calculate_heuristic_score", lambda row: row["adj_affinity"])
+
+    scored = MoleculeGenerator._post_process_scores(
+        source,
+        target_fps=["fp"],
+        adj_affinity_threshold=0.9,
+        sas_score_max=7.0,
+    )
+
+    assert list(scored["SMILES"]) == ["CCO", "CCN"]
+    assert scored.iloc[0]["adj_affinity"] == pytest.approx(0.0)
+    assert scored.iloc[1]["adj_affinity"] == pytest.approx(0.95)
 
 
 def test_run_full_workflow_generates_report(
@@ -103,13 +135,21 @@ def test_run_full_workflow_generates_report(
 
     fake_fp_generator = MagicMock()
     fake_fp_generator.GetFingerprint.side_effect = lambda mol: f"fp-{id(mol)}"
-    monkeypatch.setattr(generator.rdFingerprintGenerator, "GetMorganGenerator", lambda radius: fake_fp_generator)
+    monkeypatch.setattr(
+        generator.rdFingerprintGenerator, "GetMorganGenerator", lambda radius: fake_fp_generator
+    )
 
-    monkeypatch.setattr(generator, "get_binding_pockets_and_residues", lambda *_args, **_kwargs: ("Center", "ALA10_A, LYS12_A"))
+    monkeypatch.setattr(
+        generator,
+        "get_binding_pockets_and_residues",
+        lambda *_args, **_kwargs: ("Center", "ALA10_A, LYS12_A"),
+    )
     monkeypatch.setattr(generator, "parse_smiles_from_text", lambda _raw: ["CCO"])
     monkeypatch.setattr(generator, "passes_lipinski", lambda _mol: True)
     monkeypatch.setattr(generator, "get_max_similarity", lambda _smiles, _targets: 0.7)
-    monkeypatch.setattr(generator, "calculate_heuristic_score", lambda row: float(row["adj_affinity"]))
+    monkeypatch.setattr(
+        generator, "calculate_heuristic_score", lambda row: float(row["adj_affinity"])
+    )
 
     boltz_client = MagicMock()
     boltz_client.compute_properties = AsyncMock(return_value=scored_dataframe)
@@ -160,7 +200,9 @@ def test_run_returns_none_when_no_molecules(
 
     fake_fp_generator = MagicMock()
     fake_fp_generator.GetFingerprint.side_effect = lambda mol: f"fp-{id(mol)}"
-    monkeypatch.setattr(generator.rdFingerprintGenerator, "GetMorganGenerator", lambda radius: fake_fp_generator)
+    monkeypatch.setattr(
+        generator.rdFingerprintGenerator, "GetMorganGenerator", lambda radius: fake_fp_generator
+    )
 
     monkeypatch.setattr(generator, "parse_smiles_from_text", lambda _raw: ["CCO"])
     monkeypatch.setattr(generator, "passes_lipinski", lambda _mol: True)
@@ -168,8 +210,63 @@ def test_run_returns_none_when_no_molecules(
     boltz_client = MagicMock()
     boltz_client.compute_properties = AsyncMock(return_value=pd.DataFrame())
 
-    workflow = MoleculeGenerator(groq_api_key="g-key", boltz_client=boltz_client, pubchem_service=MagicMock())
+    workflow = MoleculeGenerator(
+        groq_api_key="g-key", boltz_client=boltz_client, pubchem_service=MagicMock()
+    )
     assert asyncio.run(workflow.run(no_pocket_options)) is None
+
+
+def test_run_logs_rejection_summary_when_candidates_are_filtered(
+    pipeline_options,
+    generator_dependencies,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Iteration logs should explain why scored candidates were discarded."""
+
+    no_pocket_options = pipeline_options.model_copy(update={"use_pocket_data": False})
+
+    fake_molecule = object()
+    monkeypatch.setattr(
+        generator.Chem,
+        "MolFromSmiles",
+        lambda smiles, **_kwargs: fake_molecule if smiles in {"CCO", "CCN", "CCC"} else None,
+    )
+
+    fake_fp_generator = MagicMock()
+    fake_fp_generator.GetFingerprint.side_effect = lambda mol: f"fp-{id(mol)}"
+    monkeypatch.setattr(
+        generator.rdFingerprintGenerator, "GetMorganGenerator", lambda radius: fake_fp_generator
+    )
+
+    monkeypatch.setattr(generator, "parse_smiles_from_text", lambda _raw: ["CCO"])
+    monkeypatch.setattr(generator, "passes_lipinski", lambda _mol: True)
+    monkeypatch.setattr(generator, "get_max_similarity", lambda _smiles, _targets: 0.7)
+    monkeypatch.setattr(
+        generator, "calculate_heuristic_score", lambda row: float(row["adj_affinity"])
+    )
+
+    boltz_client = MagicMock()
+    boltz_client.compute_properties = AsyncMock(
+        return_value=pd.DataFrame([{"SMILES": "CCO", "Affinity_Prob": 0.5, "SAS": 8.2}])
+    )
+
+    workflow = MoleculeGenerator(
+        groq_api_key="g-key",
+        boltz_client=boltz_client,
+        pubchem_service=MagicMock(),
+        settings=GeneratorSettings(ADJ_AFFINITY_THRESHOLD=0.6, SAS_SCORE_MAX=6.0),
+    )
+
+    with caplog.at_level("INFO"):
+        assert asyncio.run(workflow.run(no_pocket_options)) is None
+
+    assert any(
+        "Iteration 1/1 complete" in record.message
+        and "rejected_sas=1" in record.message
+        and "low_affinity=1" in record.message
+        for record in caplog.records
+    )
 
 
 def test_run_uses_configured_llm_model_and_temperature(
@@ -190,7 +287,9 @@ def test_run_uses_configured_llm_model_and_temperature(
 
     fake_fp_generator = MagicMock()
     fake_fp_generator.GetFingerprint.side_effect = lambda mol: f"fp-{id(mol)}"
-    monkeypatch.setattr(generator.rdFingerprintGenerator, "GetMorganGenerator", lambda radius: fake_fp_generator)
+    monkeypatch.setattr(
+        generator.rdFingerprintGenerator, "GetMorganGenerator", lambda radius: fake_fp_generator
+    )
 
     monkeypatch.setattr(generator, "parse_smiles_from_text", lambda _raw: [])
 
@@ -211,59 +310,50 @@ def test_run_uses_configured_llm_model_and_temperature(
     assert create_kwargs["temperature"] == pytest.approx(0.25)
 
 
-def test_generate_molecules_unified_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Legacy wrapper rejects missing GROQ key before generator construction."""
+def test_run_falls_back_when_pocket_detection_is_unavailable(
+    pipeline_options,
+    generator_dependencies,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing P2Rank should downgrade the workflow to few-shot mode."""
 
-    monkeypatch.setattr(generator.os, "getenv", lambda _key: None)
-
-    with pytest.raises(ValueError, match="GROQ_API_KEY"):
-        asyncio.run(
-            generate_molecules_unified(
-                pdb_path="p.pdb",
-                boltz_client=MagicMock(),
-                output_dir="results",
-                protein_sequence="MKT",
-                few_shot_csv="few_shot.csv",
-            )
-        )
-
-
-def test_generate_molecules_unified_calls_generator(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Legacy wrapper creates options and delegates to `MoleculeGenerator.run`."""
-
-    class FakeGenerator:
-        def __init__(
-            self,
-            groq_api_key: str,
-            boltz_client,
-            llm_model: str,
-            llm_temperature: float,
-        ) -> None:
-            self.groq_api_key = groq_api_key
-            self.boltz_client = boltz_client
-            self.llm_model = llm_model
-            self.llm_temperature = llm_temperature
-
-        async def run(self, options):
-            assert options.pdb_path == "protein.pdb"
-            assert options.max_iterations == 2
-            assert options.max_samples == 3
-            return "results/unified_report.csv"
-
-    monkeypatch.setattr(generator.os, "getenv", lambda _key: "g-key")
-    monkeypatch.setattr(generator, "MoleculeGenerator", FakeGenerator)
-
-    result = asyncio.run(
-        generate_molecules_unified(
-            pdb_path="protein.pdb",
-            boltz_client=MagicMock(),
-            output_dir="results",
-            protein_sequence="MKT",
-            few_shot_csv="few_shot.csv",
-            max_iterations=2,
-            max_samples=3,
-            use_pocket_data=False,
-        )
+    fake_molecule = object()
+    monkeypatch.setattr(
+        generator.Chem,
+        "MolFromSmiles",
+        lambda smiles, **_kwargs: fake_molecule if smiles in {"CCO", "CCN", "CCC"} else None,
     )
 
-    assert result == "results/unified_report.csv"
+    fake_fp_generator = MagicMock()
+    fake_fp_generator.GetFingerprint.side_effect = lambda mol: f"fp-{id(mol)}"
+    monkeypatch.setattr(
+        generator.rdFingerprintGenerator, "GetMorganGenerator", lambda radius: fake_fp_generator
+    )
+
+    monkeypatch.setattr(
+        generator,
+        "get_binding_pockets_and_residues",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(PocketDetectionError("prank not found")),
+    )
+    monkeypatch.setattr(generator, "parse_smiles_from_text", lambda _raw: ["CCO"])
+    monkeypatch.setattr(generator, "passes_lipinski", lambda _mol: True)
+
+    boltz_client = MagicMock()
+    boltz_client.compute_properties = AsyncMock(return_value=pd.DataFrame())
+
+    workflow = MoleculeGenerator(
+        groq_api_key="g-key",
+        boltz_client=boltz_client,
+        pubchem_service=MagicMock(),
+    )
+
+    assert asyncio.run(workflow.run(pipeline_options)) is None
+
+    boltz_client.compute_properties.assert_awaited_once()
+    assert boltz_client.compute_properties.await_args.kwargs["pocket_residues"] is None
+
+    user_message = generator_dependencies["groq"].chat.completions.create.call_args.kwargs[
+        "messages"
+    ][1]["content"]
+    assert "binding pocket containing" not in user_message
+    assert "Generate 2 bioisosteres" in user_message
