@@ -245,6 +245,18 @@ class BoltzPrediction(BaseModel):
     confidence_scores: list[Probability]
     complex_plddt_scores: list[Probability]
     affinities: dict[str, BoltzLigandAffinity] = Field(default_factory=dict)
+    structure: str | None = None
+
+
+class BestStructureRecord(BaseModel):
+    """Docked structure payload persisted for high-affinity candidates."""
+
+    candidate_id: str = Field(min_length=1)
+    smiles: SmilesString
+    affinity_prob: Probability
+    evaluation: dict[str, object] = Field(default_factory=dict)
+    pdb: str | None = None
+    structure: str | None = None
 
 
 class MoleculeRecord(BaseModel):
@@ -276,6 +288,7 @@ class ScoredMoleculeRecord(MoleculeRecord):
     MaxSim: Probability
     adj_affinity: Probability
     score: NonNegativeFloat
+    Candidate_ID: str | None = None
 
 
 class PatentReportRow(BaseModel):

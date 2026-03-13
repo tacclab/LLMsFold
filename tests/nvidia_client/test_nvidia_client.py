@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.nvidia_client import BoltzClient
+from src.nvidia_client import BoltzClient, BoltzResult
 from src.schemas import BoltzPrediction, PocketContact
 
 
@@ -78,7 +78,8 @@ def test_make_nvcf_call_polls_for_202_task(monkeypatch: pytest.MonkeyPatch) -> N
         )
     )
 
-    assert isinstance(result, BoltzPrediction)
+    assert isinstance(result, BoltzResult)
+    assert isinstance(result.prediction, BoltzPrediction)
     poll_mock.assert_awaited_once()
 
     call_kwargs = http_client.post.await_args.kwargs
@@ -98,6 +99,34 @@ def test_make_nvcf_call_returns_none_without_task_id() -> None:
     client = BoltzClient(api_key="token", http_client=http_client)
     assert asyncio.run(client.make_nvcf_call("CCO", "MKT")) is None
 
+
+
+
+def test_make_nvcf_call_extracts_best_structure_payload() -> None:
+    """Boltz response structure metadata should be exposed for persistence."""
+
+    payload = {
+        "ptm_scores": [0.9],
+        "iptm_scores": [0.8],
+        "confidence_scores": [0.7],
+        "complex_plddt_scores": [0.6],
+        "affinities": {"L1": {"affinity_probability_binary": [0.95], "affinity_pic50": [7.0]}},
+        "evaluation": {"dock": 1.0},
+        "pdb": "ATOM",
+        "structure": "MOCK",
+    }
+
+    http_client = MagicMock()
+    http_client.post = AsyncMock(return_value=FakeResponse(200, payload))
+
+    client = BoltzClient(api_key="token", http_client=http_client)
+    result = asyncio.run(client.make_nvcf_call("CCO", "MKT"))
+
+    assert isinstance(result, BoltzResult)
+    assert result.best_structure is not None
+    assert result.best_structure.smiles == "CCO"
+    assert result.best_structure.affinity_prob == pytest.approx(0.95)
+    assert result.best_structure.structure == "MOCK"
 
 def test_make_nvcf_call_retries_on_429_then_succeeds() -> None:
     """HTTP 429 responses are retried before failing the Boltz request."""
@@ -129,7 +158,8 @@ def test_make_nvcf_call_retries_on_429_then_succeeds() -> None:
 
     result = asyncio.run(client.make_nvcf_call("CCO", "MKT"))
 
-    assert isinstance(result, BoltzPrediction)
+    assert isinstance(result, BoltzResult)
+    assert isinstance(result.prediction, BoltzPrediction)
     assert http_client.post.await_count == 2
 
 
@@ -198,7 +228,7 @@ def test_compute_properties_builds_dataframe(monkeypatch: pytest.MonkeyPatch) ->
 
     http_client = MagicMock()
     client = BoltzClient(api_key="token", http_client=http_client)
-    monkeypatch.setattr(client, "make_nvcf_call", AsyncMock(return_value=prediction))
+    monkeypatch.setattr(client, "make_nvcf_call", AsyncMock(return_value=BoltzResult(prediction=prediction)))
 
     fake_molecule = object()
     monkeypatch.setattr(
@@ -214,7 +244,7 @@ def test_compute_properties_builds_dataframe(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr("src.nvidia_client.QED.qed", lambda _mol: 0.55)
     monkeypatch.setattr("src.nvidia_client.sa_score_mol", lambda _mol: 2.34)
 
-    dataframe = asyncio.run(
+    dataframe, best_structures = asyncio.run(
         client.compute_properties(
             ["CCO", "invalid"],
             "MKT",
@@ -226,6 +256,7 @@ def test_compute_properties_builds_dataframe(monkeypatch: pytest.MonkeyPatch) ->
     assert dataframe.iloc[0]["Affinity_Prob"] == pytest.approx(0.5)
     assert dataframe.iloc[0]["pIC50"] == pytest.approx(6.0)
     assert dataframe.iloc[0]["IC50_uM"] == pytest.approx(1.0)
+    assert best_structures == []
 
 
 def test_compute_properties_updates_progress_for_each_candidate(
@@ -265,7 +296,7 @@ def test_compute_properties_updates_progress_for_each_candidate(
 
     http_client = MagicMock()
     client = BoltzClient(api_key="token", http_client=http_client)
-    monkeypatch.setattr(client, "make_nvcf_call", AsyncMock(return_value=prediction))
+    monkeypatch.setattr(client, "make_nvcf_call", AsyncMock(return_value=BoltzResult(prediction=prediction)))
 
     fake_molecule = object()
     monkeypatch.setattr(

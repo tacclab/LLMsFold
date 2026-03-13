@@ -59,6 +59,12 @@ class GeneratorSettings(BaseSettings):
         le=1.0,
     )
     sas_score_max: float = Field(default=SAS_SCORE_MAX, alias="SAS_SCORE_MAX", ge=1.0, le=10.0)
+    best_structure_affinity_threshold: float | None = Field(
+        default=None,
+        alias="BEST_STRUCTURE_AFFINITY_THRESHOLD",
+        ge=0.0,
+        le=1.0,
+    )
     groq_api_key: SecretStr | None = Field(default=None, alias="GROQ_API_KEY")
     boltz_request_timeout_seconds: float = Field(
         default=DEFAULT_BOLTZ_REQUEST_TIMEOUT_SECONDS,
