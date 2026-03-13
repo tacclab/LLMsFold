@@ -145,7 +145,7 @@ def get_binding_pockets_and_residues(
     import deepchem as dc
 
     finder = dc.dock.ConvexHullPocketFinder(pad=DEFAULT_DEEPCHEM_POCKET_PAD)
-    pockets = finder.find_pockets(pdb_path)
+    pockets = finder.find_pockets(str(pdb_path))
     if not pockets:
         return "No pockets found", "Unknown"
 
