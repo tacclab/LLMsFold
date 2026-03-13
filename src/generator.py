@@ -35,6 +35,7 @@ from src.core.logging import get_logger
 from src.core.messages import (
     invalid_smiles,
     no_molecules_generated,
+    persist_structure_unavailable,
     pocket_detection_unavailable,
 )
 from src.core.progress import gather_with_progress, make_progress_bar
@@ -150,15 +151,26 @@ class MoleculeGenerator:
 
         base_dir = output_dir / "best"
         saved_count = 0
+        skipped_low_affinity = 0
         for row in final_hits.to_dict("records"):
             affinity = float(row.get("Affinity_Prob", 0.0))
             smiles = str(row.get("SMILES", ""))
             candidate_id = str(row.get("Candidate_ID", ""))
-            if affinity <= threshold or not smiles or not candidate_id:
+            if not smiles or not candidate_id:
+                continue
+            if affinity <= threshold:
+                logger.info(
+                    "Skipping structure save for %s: Affinity_Prob=%.3f <= BEST_STRUCTURE_AFFINITY_THRESHOLD=%.3f",
+                    candidate_id,
+                    affinity,
+                    threshold,
+                )
+                skipped_low_affinity += 1
                 continue
 
             structure = best_structures_by_smiles.get(smiles)
             if structure is None:
+                logger.warning(persist_structure_unavailable(smiles, candidate_id))
                 continue
 
             data_dir = base_dir / candidate_id / "data"
@@ -167,16 +179,21 @@ class MoleculeGenerator:
                 "candidate_id": candidate_id,
                 "smiles": smiles,
                 "affinity_prob": affinity,
-                "evaluation": structure.evaluation,
-                "pdb": structure.pdb,
-                "structure": structure.structure,
             }
             (data_dir / "metadata.json").write_text(
                 json.dumps(metadata, indent=2, sort_keys=True),
                 encoding="utf-8",
             )
+            (data_dir / "structure.cif").write_text(structure.structure, encoding="utf-8")
             saved_count += 1
 
+        if skipped_low_affinity:
+            logger.info(
+                "%s structure(s) skipped: Affinity_Prob below BEST_STRUCTURE_AFFINITY_THRESHOLD=%.3f. "
+                "Lower BEST_STRUCTURE_AFFINITY_THRESHOLD in .env to save more structures.",
+                skipped_low_affinity,
+                threshold,
+            )
         return saved_count
 
     @staticmethod

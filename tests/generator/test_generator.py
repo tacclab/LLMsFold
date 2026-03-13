@@ -398,9 +398,7 @@ def test_run_saves_best_structure_payload_above_threshold(
                     candidate_id="pending",
                     smiles="CCO",
                     affinity_prob=0.95,
-                    evaluation={"score": 1.2},
-                    pdb="ATOM",
-                    structure="MOCK-STRUCTURE",
+                    structure="MOCK-MMCIF-CONTENT",
                 )
             ],
         )
@@ -421,9 +419,12 @@ def test_run_saves_best_structure_payload_above_threshold(
     report_path = asyncio.run(workflow.run(no_pocket_options))
 
     assert report_path is not None
-    metadata_path = Path(no_pocket_options.output_dir) / "best" / "candidate-0001" / "data" / "metadata.json"
+    data_dir = Path(no_pocket_options.output_dir) / "best" / "candidate-0001" / "data"
+    metadata_path = data_dir / "metadata.json"
+    cif_path = data_dir / "structure.cif"
     assert metadata_path.exists()
+    assert cif_path.exists()
 
     metadata = metadata_path.read_text(encoding="utf-8")
     assert '"smiles": "CCO"' in metadata
-    assert '"structure": "MOCK-STRUCTURE"' in metadata
+    assert cif_path.read_text(encoding="utf-8") == "MOCK-MMCIF-CONTENT"

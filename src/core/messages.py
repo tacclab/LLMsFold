@@ -89,6 +89,24 @@ def invalid_boltz_response(smiles: str) -> str:
     return f"Discarding invalid Boltz response for {smiles}"
 
 
+def boltz_structure_missing(smiles: str) -> str:
+    """Returns a warning when Boltz returns scores but no structure payload."""
+
+    return (
+        f"Boltz returned affinity scores for {smiles} but no 'structure' or 'pdb' field "
+        "in the response — structure cannot be persisted for this molecule."
+    )
+
+
+def persist_structure_unavailable(smiles: str, candidate_id: str) -> str:
+    """Returns a warning when a high-affinity molecule has no stored structure."""
+
+    return (
+        f"No Boltz structure payload available for {candidate_id} ({smiles}); "
+        "skipping structure save. Boltz may not have returned structure data for this molecule."
+    )
+
+
 def pubchem_query_error(smiles: str, exc: Exception) -> str:
     """Returns a warning for degraded PubChem verification."""
 

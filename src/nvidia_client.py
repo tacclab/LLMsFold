@@ -17,6 +17,7 @@ from src.clients import get_cached_http_client
 from src.core.config import GeneratorSettings, get_generator_settings
 from src.core.logging import get_logger
 from src.core.messages import (
+    boltz_structure_missing,
     boltz_task_timeout,
     invalid_boltz_response,
     unsupported_chain_id,
@@ -282,21 +283,18 @@ class BoltzClient:
             logger.warning(invalid_boltz_response(smiles))
             return None
 
-        best_structure = self._extract_best_structure(raw_data, smiles, prediction)
+        best_structure = self._extract_best_structure(smiles, prediction)
         return BoltzResult(prediction=prediction, best_structure=best_structure)
 
     @staticmethod
     def _extract_best_structure(
-        raw_data: dict[str, object],
         smiles: str,
         prediction: BoltzPrediction,
     ) -> BestStructureRecord | None:
-        """Extracts optional docked structure fields from a raw Boltz response."""
+        """Extracts the mmCIF structure from the first Boltz structure entry."""
 
-        structure = raw_data.get("structure")
-        evaluation = raw_data.get("evaluation")
-        pdb = raw_data.get("pdb")
-        if not isinstance(structure, str) and not isinstance(pdb, str):
+        if not prediction.structures:
+            logger.warning(boltz_structure_missing(smiles))
             return None
 
         affinity = 0.0
@@ -309,9 +307,7 @@ class BoltzClient:
             candidate_id="pending",
             smiles=smiles,
             affinity_prob=affinity,
-            evaluation=evaluation if isinstance(evaluation, dict) else {},
-            pdb=pdb if isinstance(pdb, str) else None,
-            structure=structure if isinstance(structure, str) else None,
+            structure=prediction.structures[0].structure,
         )
 
     async def compute_properties(

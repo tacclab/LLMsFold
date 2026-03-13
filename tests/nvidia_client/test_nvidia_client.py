@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.nvidia_client import BoltzClient, BoltzResult
-from src.schemas import BoltzPrediction, PocketContact
+from src.schemas import BestStructureRecord, BoltzPrediction, PocketContact
 
 
 class FakeResponse:
@@ -21,6 +21,20 @@ class FakeResponse:
         return self._payload
 
 
+def _make_payload(**overrides) -> dict:
+    """Returns a minimal valid BoltzPredictionResponse payload."""
+    base = {
+        "structures": [{"structure": "data_\nloop_", "format": "mmcif"}],
+        "ptm_scores": [0.9],
+        "iptm_scores": [0.8],
+        "confidence_scores": [0.7],
+        "complex_plddt_scores": [0.6],
+        "affinities": {"L1": {"affinity_probability_binary": [0.95], "affinity_pic50": [7.0]}},
+    }
+    base.update(overrides)
+    return base
+
+
 @pytest.mark.parametrize(
     ("status_code", "expected_is_none"),
     [
@@ -31,16 +45,8 @@ class FakeResponse:
 def test_make_nvcf_call_direct_status_paths(status_code: int, expected_is_none: bool) -> None:
     """200 responses are parsed; non-200/202 failures return `None`."""
 
-    payload = {
-        "ptm_scores": [0.9],
-        "iptm_scores": [0.8],
-        "confidence_scores": [0.7],
-        "complex_plddt_scores": [0.6],
-        "affinities": {"L1": {"affinity_probability_binary": [0.95], "affinity_pic50": [7.0]}},
-    }
-
     http_client = MagicMock()
-    http_client.post = AsyncMock(return_value=FakeResponse(status_code, payload))
+    http_client.post = AsyncMock(return_value=FakeResponse(status_code, _make_payload()))
 
     client = BoltzClient(api_key="token", http_client=http_client)
     result = asyncio.run(client.make_nvcf_call("CCO", "MKT"))
@@ -52,13 +58,13 @@ def test_make_nvcf_call_polls_for_202_task(monkeypatch: pytest.MonkeyPatch) -> N
     """Accepted jobs poll by task id and parse eventual payload."""
 
     accepted = FakeResponse(202, {}, headers={"nvcf-reqid": "task-123"})
-    payload = {
-        "ptm_scores": [1.0],
-        "iptm_scores": [0.5],
-        "confidence_scores": [0.4],
-        "complex_plddt_scores": [0.3],
-        "affinities": {"L1": {"affinity_probability_binary": [0.9], "affinity_pic50": [6.0]}},
-    }
+    payload = _make_payload(
+        ptm_scores=[1.0],
+        iptm_scores=[0.5],
+        confidence_scores=[0.4],
+        complex_plddt_scores=[0.3],
+        affinities={"L1": {"affinity_probability_binary": [0.9], "affinity_pic50": [6.0]}},
+    )
 
     http_client = MagicMock()
     http_client.post = AsyncMock(return_value=accepted)
@@ -100,21 +106,13 @@ def test_make_nvcf_call_returns_none_without_task_id() -> None:
     assert asyncio.run(client.make_nvcf_call("CCO", "MKT")) is None
 
 
-
-
 def test_make_nvcf_call_extracts_best_structure_payload() -> None:
-    """Boltz response structure metadata should be exposed for persistence."""
+    """Boltz response structures array is extracted and exposed for persistence."""
 
-    payload = {
-        "ptm_scores": [0.9],
-        "iptm_scores": [0.8],
-        "confidence_scores": [0.7],
-        "complex_plddt_scores": [0.6],
-        "affinities": {"L1": {"affinity_probability_binary": [0.95], "affinity_pic50": [7.0]}},
-        "evaluation": {"dock": 1.0},
-        "pdb": "ATOM",
-        "structure": "MOCK",
-    }
+    payload = _make_payload(
+        structures=[{"structure": "MOCK_MMCIF_CONTENT", "format": "mmcif", "name": "pred_0"}],
+        affinities={"L1": {"affinity_probability_binary": [0.95], "affinity_pic50": [7.0]}},
+    )
 
     http_client = MagicMock()
     http_client.post = AsyncMock(return_value=FakeResponse(200, payload))
@@ -126,24 +124,32 @@ def test_make_nvcf_call_extracts_best_structure_payload() -> None:
     assert result.best_structure is not None
     assert result.best_structure.smiles == "CCO"
     assert result.best_structure.affinity_prob == pytest.approx(0.95)
-    assert result.best_structure.structure == "MOCK"
+    assert result.best_structure.structure == "MOCK_MMCIF_CONTENT"
+
+
+def test_make_nvcf_call_no_structure_when_structures_empty() -> None:
+    """Empty structures list means best_structure is None (no file to persist)."""
+
+    payload = _make_payload(structures=[])
+
+    http_client = MagicMock()
+    http_client.post = AsyncMock(return_value=FakeResponse(200, payload))
+
+    client = BoltzClient(api_key="token", http_client=http_client)
+    result = asyncio.run(client.make_nvcf_call("CCO", "MKT"))
+
+    assert isinstance(result, BoltzResult)
+    assert result.best_structure is None
+
 
 def test_make_nvcf_call_retries_on_429_then_succeeds() -> None:
     """HTTP 429 responses are retried before failing the Boltz request."""
-
-    payload = {
-        "ptm_scores": [0.9],
-        "iptm_scores": [0.8],
-        "confidence_scores": [0.7],
-        "complex_plddt_scores": [0.6],
-        "affinities": {"L1": {"affinity_probability_binary": [0.95], "affinity_pic50": [7.0]}},
-    }
 
     http_client = MagicMock()
     http_client.post = AsyncMock(
         side_effect=[
             FakeResponse(429, {}, headers={"Retry-After": "0"}),
-            FakeResponse(200, payload),
+            FakeResponse(200, _make_payload()),
         ]
     )
 
@@ -216,19 +222,20 @@ def test_poll_task_returns_none_on_error_status(monkeypatch: pytest.MonkeyPatch)
 def test_compute_properties_builds_dataframe(monkeypatch: pytest.MonkeyPatch) -> None:
     """Property computation collects one row per valid molecule with successful prediction."""
 
-    prediction = BoltzPrediction.model_validate(
-        {
-            "ptm_scores": [0.9],
-            "iptm_scores": [0.8],
-            "confidence_scores": [0.7],
-            "complex_plddt_scores": [0.6],
-            "affinities": {"L1": {"affinity_probability_binary": [0.5], "affinity_pic50": [6.0]}},
-        }
+    prediction = BoltzPrediction.model_validate(_make_payload(
+        affinities={"L1": {"affinity_probability_binary": [0.5], "affinity_pic50": [6.0]}},
+    ))
+    best_structure = BestStructureRecord(
+        candidate_id="pending", smiles="CCO", affinity_prob=0.5, structure="data_\nloop_"
     )
 
     http_client = MagicMock()
     client = BoltzClient(api_key="token", http_client=http_client)
-    monkeypatch.setattr(client, "make_nvcf_call", AsyncMock(return_value=BoltzResult(prediction=prediction)))
+    monkeypatch.setattr(
+        client,
+        "make_nvcf_call",
+        AsyncMock(return_value=BoltzResult(prediction=prediction, best_structure=best_structure)),
+    )
 
     fake_molecule = object()
     monkeypatch.setattr(
@@ -256,7 +263,9 @@ def test_compute_properties_builds_dataframe(monkeypatch: pytest.MonkeyPatch) ->
     assert dataframe.iloc[0]["Affinity_Prob"] == pytest.approx(0.5)
     assert dataframe.iloc[0]["pIC50"] == pytest.approx(6.0)
     assert dataframe.iloc[0]["IC50_uM"] == pytest.approx(1.0)
-    assert best_structures == []
+    # structures array is present → best_structure should be populated
+    assert len(best_structures) == 1
+    assert best_structures[0].structure == "data_\nloop_"
 
 
 def test_compute_properties_updates_progress_for_each_candidate(
@@ -264,15 +273,9 @@ def test_compute_properties_updates_progress_for_each_candidate(
 ) -> None:
     """Boltz scoring progress should advance once per input candidate."""
 
-    prediction = BoltzPrediction.model_validate(
-        {
-            "ptm_scores": [0.9],
-            "iptm_scores": [0.8],
-            "confidence_scores": [0.7],
-            "complex_plddt_scores": [0.6],
-            "affinities": {"L1": {"affinity_probability_binary": [0.5], "affinity_pic50": [6.0]}},
-        }
-    )
+    prediction = BoltzPrediction.model_validate(_make_payload(
+        affinities={"L1": {"affinity_probability_binary": [0.5], "affinity_pic50": [6.0]}},
+    ))
 
     class DummyProgressBar:
         def __init__(self) -> None:
