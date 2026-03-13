@@ -143,6 +143,7 @@ class MoleculeGenerator:
         final_hits: pd.DataFrame,
         output_dir: Path,
         threshold: float | None,
+        pocket_metadata: dict[str, Any] | None = None,
     ) -> int:
         """Persists docked structures for high-affinity molecules when enabled."""
 
@@ -180,6 +181,8 @@ class MoleculeGenerator:
                 "smiles": smiles,
                 "affinity_prob": affinity,
             }
+            if pocket_metadata is not None:
+                metadata["selected_pocket"] = pocket_metadata
             (data_dir / "metadata.json").write_text(
                 json.dumps(metadata, indent=2, sort_keys=True),
                 encoding="utf-8",
@@ -262,6 +265,7 @@ class MoleculeGenerator:
             step_started_at = perf_counter()
             pocket_residues: str | None = None
             residue_contacts: list[PocketContact] = []
+            selected_pocket_metadata: dict[str, Any] | None = None
             use_pocket_data = options.use_pocket_data
             if use_pocket_data:
                 logger.info(
@@ -285,6 +289,13 @@ class MoleculeGenerator:
                     use_pocket_data = False
                 else:
                     residue_contacts = self._extract_residue_contacts(pocket_residues)
+                    selected_pocket_metadata = {
+                        "coordinates": pocket_coords,
+                        "residues": pocket_residues,
+                        "residue_contacts": [
+                            contact.model_dump() for contact in residue_contacts
+                        ],
+                    }
                     logger.info(
                         "Using pocket constraints from %s with %s residue contacts",
                         pocket_coords,
@@ -522,6 +533,7 @@ class MoleculeGenerator:
                 final_hits,
                 options.output_dir,
                 self._best_structure_affinity_threshold,
+                selected_pocket_metadata,
             )
             step_progress.update(1)
             step_progress.set_postfix_str("report written")
