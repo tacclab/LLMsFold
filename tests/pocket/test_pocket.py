@@ -233,10 +233,11 @@ def test_get_binding_pockets_and_residues_uses_p2rank_by_default(
         return "ALA10_A"
 
     monkeypatch.setattr(pocket, "get_p2rank_pocket", _fake_get_p2rank_pocket)
-    center, residues = pocket.get_binding_pockets_and_residues("protein.pdb")
+    center, residues, box_dims = pocket.get_binding_pockets_and_residues("protein.pdb")
 
     assert center == "P2Rank"
     assert residues == "ALA10_A"
+    assert box_dims is None
     assert calls == ["results"]
 
 
@@ -251,10 +252,11 @@ def test_get_binding_pockets_and_residues_no_pockets(monkeypatch: pytest.MonkeyP
     )
     monkeypatch.setitem(__import__("sys").modules, "deepchem", fake_deepchem)
 
-    center, residues = pocket.get_binding_pockets_and_residues("protein.pdb", backend="deepchem")
+    center, residues, box_dims = pocket.get_binding_pockets_and_residues("protein.pdb", backend="deepchem")
 
     assert center == "No pockets found"
     assert residues == "Unknown"
+    assert box_dims is None
 
 
 def test_get_binding_pockets_and_residues_with_mocked_mol(
@@ -287,13 +289,25 @@ def test_get_binding_pockets_and_residues_with_mocked_mol(
     monkeypatch.setattr(pocket.Chem, "MolFromPDBFile", lambda _path: fake_mol)
 
     output_dir = tmp_path / "results"
-    center, residues = pocket.get_binding_pockets_and_residues(
+    center, residues, box_dims = pocket.get_binding_pockets_and_residues(
         "protein.pdb", str(output_dir), backend="deepchem"
     )
 
     assert center == "Center: 1.00, 2.00, 3.00"
     assert residues == "ALA10_A"
-    assert (output_dir / "all_pockets.csv").exists()
+    pockets_csv = output_dir / "all_pockets.csv"
+    assert pockets_csv.exists()
+    import pandas as pd
+    df = pd.read_csv(pockets_csv)
+    assert {"center_x", "center_y", "center_z", "size_x", "size_y", "size_z", "volume_approx"}.issubset(df.columns)
+    assert box_dims == {
+        "center_x": 1.0,
+        "center_y": 2.0,
+        "center_z": 3.0,
+        "size_x": 2.0,
+        "size_y": 2.0,
+        "size_z": 2.0,
+    }
 
 
 def test_get_binding_pockets_and_residues_handles_unreadable_pdb(
@@ -313,9 +327,17 @@ def test_get_binding_pockets_and_residues_handles_unreadable_pdb(
     monkeypatch.setattr(pocket, "_select_pocket", lambda pockets, rows, pocket_index: selected)
     monkeypatch.setattr(pocket.Chem, "MolFromPDBFile", lambda _path: None)
 
-    center, residues = pocket.get_binding_pockets_and_residues(
+    center, residues, box_dims = pocket.get_binding_pockets_and_residues(
         "protein.pdb", str(tmp_path), backend="deepchem"
     )
 
     assert center == "Center: 5.00, 6.00, 7.00"
     assert residues == "Unknown"
+    assert box_dims == {
+        "center_x": 5.0,
+        "center_y": 6.0,
+        "center_z": 7.0,
+        "size_x": 1.0,
+        "size_y": 1.0,
+        "size_z": 1.0,
+    }

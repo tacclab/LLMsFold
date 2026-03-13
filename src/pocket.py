@@ -126,7 +126,7 @@ def get_binding_pockets_and_residues(
     output_dir: str | Path = "results",
     backend: str = "p2rank",
     pocket_index: int = 0,
-) -> tuple[str, str]:
+) -> tuple[str, str, dict[str, float] | None]:
     """Finds pockets and residues within 8A around chosen pocket center.
 
     Args:
@@ -134,12 +134,14 @@ def get_binding_pockets_and_residues(
         output_dir: Directory where detected pocket summary is saved.
 
     Returns:
-        Tuple containing pocket center string and nearby residue list string.
+        Tuple containing pocket center string, nearby residue list string, and
+        an optional dict with box dimensions ``{size_x, size_y, size_z}`` in
+        Angstroms (only populated for the deepchem backend).
     """
 
     if backend == "p2rank":
         residues = get_p2rank_pocket(pdb_path, output_dir=output_dir)
-        return "P2Rank", residues
+        return "P2Rank", residues, None
 
     # Lazy import avoids importing DeepChem at module import time.
     import deepchem as dc
@@ -147,18 +149,21 @@ def get_binding_pockets_and_residues(
     finder = dc.dock.ConvexHullPocketFinder(pad=DEFAULT_DEEPCHEM_POCKET_PAD)
     pockets = finder.find_pockets(str(pdb_path))
     if not pockets:
-        return "No pockets found", "Unknown"
+        return "No pockets found", "Unknown", None
 
     pocket_data: list[dict[str, float]] = []
-    for idx, pocket in enumerate(pockets, start=1):
-        center = pocket.center()
+    for idx, p in enumerate(pockets, start=1):
+        center = p.center()
         pocket_data.append(
             {
                 "pocket_id": float(idx),
                 "center_x": float(center[0]),
                 "center_y": float(center[1]),
                 "center_z": float(center[2]),
-                "volume_approx": float(_pocket_volume(pocket)),
+                "size_x": float(p.x_range[1] - p.x_range[0]),
+                "size_y": float(p.y_range[1] - p.y_range[0]),
+                "size_z": float(p.z_range[1] - p.z_range[0]),
+                "volume_approx": float(_pocket_volume(p)),
             }
         )
 
@@ -168,9 +173,19 @@ def get_binding_pockets_and_residues(
     best_pocket = _select_pocket(pockets, pocket_data, pocket_index=pocket_index)
     center = np.asarray(best_pocket.center(), dtype=float)
 
+    pose_info: dict[str, float] = {
+        "center_x": float(center[0]),
+        "center_y": float(center[1]),
+        "center_z": float(center[2]),
+        "size_x": float(best_pocket.x_range[1] - best_pocket.x_range[0]),
+        "size_y": float(best_pocket.y_range[1] - best_pocket.y_range[0]),
+        "size_z": float(best_pocket.z_range[1] - best_pocket.z_range[0]),
+    }
+
     mol = Chem.MolFromPDBFile(os.fspath(pdb_path))
     if mol is None:
-        return f"Center: {center[0]:.2f}, {center[1]:.2f}, {center[2]:.2f}", "Unknown"
+        pocket_desc = f"Center: {center[0]:.2f}, {center[1]:.2f}, {center[2]:.2f}"
+        return pocket_desc, "Unknown", pose_info
 
     conformer = mol.GetConformer()
     nearby_residues: set[str] = set()
@@ -190,4 +205,4 @@ def get_binding_pockets_and_residues(
 
     residue_list = ", ".join(sorted(nearby_residues))
     pocket_desc = f"Center: {center[0]:.2f}, {center[1]:.2f}, {center[2]:.2f}"
-    return pocket_desc, residue_list
+    return pocket_desc, residue_list, pose_info

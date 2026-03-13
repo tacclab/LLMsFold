@@ -280,12 +280,12 @@ class MoleculeGenerator:
 
             if use_pocket_data:
                 try:
-                    pocket_coords, pocket_residues = get_binding_pockets_and_residues(
+                    pocket_coords, pocket_residues, pocket_box_dims = get_binding_pockets_and_residues(
                         options.pdb_path,
                         options.output_dir,
                         backend="deepchem",
                     )
-                except (PocketDetectionError, subprocess.SubprocessError) as exc:
+                except (PocketDetectionError, subprocess.SubprocessError, TypeError) as exc:
                     logger.warning(pocket_detection_unavailable(exc))
                     use_pocket_data = False
                 else:
@@ -297,6 +297,8 @@ class MoleculeGenerator:
                             contact.model_dump() for contact in residue_contacts
                         ],
                     }
+                    if pocket_box_dims is not None:
+                        selected_pocket_metadata["docking_box"] = pocket_box_dims
                     logger.info(
                         "Using pocket constraints from %s with %s residue contacts",
                         pocket_coords,
