@@ -17,6 +17,7 @@ from src.clients import get_cached_http_client
 from src.core.config import GeneratorSettings, get_generator_settings
 from src.core.logging import get_logger
 from src.core.messages import (
+    boltz_structure_missing,
     boltz_task_timeout,
     invalid_boltz_response,
     unsupported_chain_id,
@@ -24,6 +25,7 @@ from src.core.messages import (
 from src.core.progress import make_progress_bar
 from src.sa_score import sa_score_mol
 from src.schemas import (
+    BestStructureRecord,
     BoltzA3M,
     BoltzContact,
     BoltzLigandAffinity,
@@ -71,6 +73,15 @@ def _parse_retry_after(value: str | None) -> float | None:
         retry_at = retry_at.replace(tzinfo=timezone.utc)
     return max((retry_at - datetime.now(timezone.utc)).total_seconds(), 0.0)
 
+
+
+
+class BoltzResult:
+    """Validated Boltz prediction plus optional docked structure payload."""
+
+    def __init__(self, prediction: BoltzPrediction, best_structure: BestStructureRecord | None = None) -> None:
+        self.prediction = prediction
+        self.best_structure = best_structure
 
 class BoltzClient:
     """Async wrapper around NVIDIA Boltz prediction API."""
@@ -203,7 +214,7 @@ class BoltzClient:
         smiles: str,
         sequence: str,
         pocket_residues: Sequence[PocketContact] | None = None,
-    ) -> BoltzPrediction | None:
+    ) -> BoltzResult | None:
         """Submits a Boltz prediction and validates response structure.
 
         Args:
@@ -212,7 +223,7 @@ class BoltzClient:
             pocket_residues: Optional validated residue contacts for pocket constraints.
 
         Returns:
-            Parsed `BoltzPrediction` payload when successful.
+            Parsed Boltz prediction and optional docked structure payload when successful.
         """
 
         headers = {
@@ -267,17 +278,44 @@ class BoltzClient:
             return None
 
         try:
-            return BoltzPrediction.model_validate(raw_data)
+            prediction = BoltzPrediction.model_validate(raw_data)
         except ValidationError:
             logger.warning(invalid_boltz_response(smiles))
             return None
+
+        best_structure = self._extract_best_structure(smiles, prediction)
+        return BoltzResult(prediction=prediction, best_structure=best_structure)
+
+    @staticmethod
+    def _extract_best_structure(
+        smiles: str,
+        prediction: BoltzPrediction,
+    ) -> BestStructureRecord | None:
+        """Extracts the mmCIF structure from the first Boltz structure entry."""
+
+        if not prediction.structures:
+            logger.warning(boltz_structure_missing(smiles))
+            return None
+
+        affinity = 0.0
+        if prediction.affinities:
+            ligand_affinity = next(iter(prediction.affinities.values()))
+            if ligand_affinity.affinity_probability_binary:
+                affinity = ligand_affinity.affinity_probability_binary[0]
+
+        return BestStructureRecord(
+            candidate_id="pending",
+            smiles=smiles,
+            affinity_prob=affinity,
+            structure=prediction.structures[0].structure,
+        )
 
     async def compute_properties(
         self,
         smiles_list: list[str],
         sequence: str,
         pocket_residues: Sequence[PocketContact] | None = None,
-    ) -> pd.DataFrame:
+    ) -> tuple[pd.DataFrame, list[BestStructureRecord]]:
         """Evaluates candidate molecules and returns computed properties.
 
         Args:
@@ -286,15 +324,16 @@ class BoltzClient:
             pocket_residues: Optional validated residue contacts.
 
         Returns:
-            Dataframe with one row per successfully evaluated molecule.
+            Tuple of dataframe rows and optional docked structures from Boltz responses.
         """
 
         if not smiles_list:
             logger.info("No candidates available for Boltz scoring")
-            return pd.DataFrame()
+            return pd.DataFrame(), []
 
         logger.info("Submitting %s candidates to Boltz", len(smiles_list))
         records: list[MoleculeRecord] = []
+        best_structures: list[BestStructureRecord] = []
         with make_progress_bar(
             total=len(smiles_list), desc="Boltz scoring", unit="mol"
         ) as progress:
@@ -308,12 +347,12 @@ class BoltzClient:
                     continue
 
                 logger.debug("Submitting Boltz evaluation for %s", smiles)
-                prediction = await self.make_nvcf_call(
+                result = await self.make_nvcf_call(
                     smiles=smiles,
                     sequence=sequence,
                     pocket_residues=pocket_residues,
                 )
-                if prediction is None:
+                if result is None:
                     logger.warning(
                         "Boltz returned no prediction for %s after %.2fs",
                         smiles,
@@ -321,6 +360,8 @@ class BoltzClient:
                     )
                     progress.update(1)
                     continue
+
+                prediction = result.prediction
 
                 ptm = prediction.ptm_scores[0] if prediction.ptm_scores else 0.0
                 iptm = prediction.iptm_scores[0] if prediction.iptm_scores else 0.0
@@ -377,6 +418,8 @@ class BoltzClient:
                     Rotatable_Bonds=int(Descriptors.NumRotatableBonds(mol)),
                 )
                 records.append(record)
+                if result.best_structure is not None:
+                    best_structures.append(result.best_structure)
                 progress.update(1)
 
         logger.info(
@@ -384,4 +427,4 @@ class BoltzClient:
             len(records),
             len(smiles_list),
         )
-        return pd.DataFrame.from_records([record.model_dump() for record in records])
+        return pd.DataFrame.from_records([record.model_dump() for record in records]), best_structures

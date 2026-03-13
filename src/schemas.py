@@ -167,8 +167,13 @@ class BoltzLigandAffinity(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    affinity_probability_binary: list[Probability]
-    affinity_pic50: list[float]
+    affinity_pred_value: list[float] = Field(default_factory=list)
+    affinity_probability_binary: list[Probability] = Field(default_factory=list)
+    model_1_affinity_pred_value: list[float] = Field(default_factory=list)
+    model_1_affinity_probability_binary: list[Probability] = Field(default_factory=list)
+    model_2_affinity_pred_value: list[float] = Field(default_factory=list)
+    model_2_affinity_probability_binary: list[Probability] = Field(default_factory=list)
+    affinity_pic50: list[float] = Field(default_factory=list)
 
 
 class BoltzContact(BaseModel):
@@ -235,16 +240,37 @@ class BoltzRequest(BaseModel):
     without_potentials: bool = True
 
 
+class BoltzStructure(BaseModel):
+    """A single structure prediction in mmCIF format returned by Boltz."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    structure: str
+    format: str = "mmcif"
+    name: str | None = None
+    source: str | None = None
+
+
 class BoltzPrediction(BaseModel):
     """Normalized NVIDIA Boltz response payload."""
 
     model_config = ConfigDict(extra="ignore")
 
-    ptm_scores: list[Probability]
-    iptm_scores: list[Probability]
-    confidence_scores: list[Probability]
-    complex_plddt_scores: list[Probability]
+    structures: list[BoltzStructure] = Field(default_factory=list)
+    ptm_scores: list[Probability] = Field(default_factory=list)
+    iptm_scores: list[Probability] = Field(default_factory=list)
+    confidence_scores: list[Probability] = Field(default_factory=list)
+    complex_plddt_scores: list[Probability] = Field(default_factory=list)
     affinities: dict[str, BoltzLigandAffinity] = Field(default_factory=dict)
+
+
+class BestStructureRecord(BaseModel):
+    """Docked structure payload persisted for high-affinity candidates."""
+
+    candidate_id: str = Field(min_length=1)
+    smiles: SmilesString
+    affinity_prob: Probability
+    structure: str  # mmCIF content
 
 
 class MoleculeRecord(BaseModel):
@@ -276,6 +302,7 @@ class ScoredMoleculeRecord(MoleculeRecord):
     MaxSim: Probability
     adj_affinity: Probability
     score: NonNegativeFloat
+    Candidate_ID: str | None = None
 
 
 class PatentReportRow(BaseModel):

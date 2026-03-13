@@ -152,7 +152,7 @@ def test_run_full_workflow_generates_report(
     )
 
     boltz_client = MagicMock()
-    boltz_client.compute_properties = AsyncMock(return_value=scored_dataframe)
+    boltz_client.compute_properties = AsyncMock(return_value=(scored_dataframe, []))
 
     pubchem_service = MagicMock()
     pubchem_service.check_patents = AsyncMock(
@@ -208,7 +208,7 @@ def test_run_returns_none_when_no_molecules(
     monkeypatch.setattr(generator, "passes_lipinski", lambda _mol: True)
 
     boltz_client = MagicMock()
-    boltz_client.compute_properties = AsyncMock(return_value=pd.DataFrame())
+    boltz_client.compute_properties = AsyncMock(return_value=(pd.DataFrame(), []))
 
     workflow = MoleculeGenerator(
         groq_api_key="g-key", boltz_client=boltz_client, pubchem_service=MagicMock()
@@ -248,7 +248,7 @@ def test_run_logs_rejection_summary_when_candidates_are_filtered(
 
     boltz_client = MagicMock()
     boltz_client.compute_properties = AsyncMock(
-        return_value=pd.DataFrame([{"SMILES": "CCO", "Affinity_Prob": 0.5, "SAS": 8.2}])
+        return_value=(pd.DataFrame([{"SMILES": "CCO", "Affinity_Prob": 0.5, "SAS": 8.2}]), [])
     )
 
     workflow = MoleculeGenerator(
@@ -294,7 +294,7 @@ def test_run_uses_configured_llm_model_and_temperature(
     monkeypatch.setattr(generator, "parse_smiles_from_text", lambda _raw: [])
 
     boltz_client = MagicMock()
-    boltz_client.compute_properties = AsyncMock(return_value=pd.DataFrame())
+    boltz_client.compute_properties = AsyncMock(return_value=(pd.DataFrame(), []))
 
     workflow = MoleculeGenerator(
         groq_api_key="g-key",
@@ -339,7 +339,7 @@ def test_run_falls_back_when_pocket_detection_is_unavailable(
     monkeypatch.setattr(generator, "passes_lipinski", lambda _mol: True)
 
     boltz_client = MagicMock()
-    boltz_client.compute_properties = AsyncMock(return_value=pd.DataFrame())
+    boltz_client.compute_properties = AsyncMock(return_value=(pd.DataFrame(), []))
 
     workflow = MoleculeGenerator(
         groq_api_key="g-key",
@@ -357,3 +357,74 @@ def test_run_falls_back_when_pocket_detection_is_unavailable(
     ][1]["content"]
     assert "binding pocket containing" not in user_message
     assert "Generate 2 bioisosteres" in user_message
+
+
+def test_run_saves_best_structure_payload_above_threshold(
+    pipeline_options,
+    scored_dataframe,
+    generator_dependencies,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """High-affinity molecules should persist Boltz docked structure metadata."""
+
+    no_pocket_options = pipeline_options.model_copy(update={"use_pocket_data": False})
+
+    fake_molecule = object()
+    monkeypatch.setattr(
+        generator.Chem,
+        "MolFromSmiles",
+        lambda smiles, **_kwargs: fake_molecule if smiles in {"CCO", "CCN", "CCC"} else None,
+    )
+
+    fake_fp_generator = MagicMock()
+    fake_fp_generator.GetFingerprint.side_effect = lambda mol: f"fp-{id(mol)}"
+    monkeypatch.setattr(
+        generator.rdFingerprintGenerator, "GetMorganGenerator", lambda radius: fake_fp_generator
+    )
+
+    monkeypatch.setattr(generator, "parse_smiles_from_text", lambda _raw: ["CCO"])
+    monkeypatch.setattr(generator, "passes_lipinski", lambda _mol: True)
+    monkeypatch.setattr(generator, "get_max_similarity", lambda _smiles, _targets: 0.7)
+    monkeypatch.setattr(
+        generator, "calculate_heuristic_score", lambda row: float(row["adj_affinity"])
+    )
+
+    boltz_client = MagicMock()
+    boltz_client.compute_properties = AsyncMock(
+        return_value=(
+            scored_dataframe,
+            [
+                generator.BestStructureRecord(
+                    candidate_id="pending",
+                    smiles="CCO",
+                    affinity_prob=0.95,
+                    structure="MOCK-MMCIF-CONTENT",
+                )
+            ],
+        )
+    )
+
+    pubchem_service = MagicMock()
+    pubchem_service.check_patents = AsyncMock(
+        return_value=PatentCheckResult(pubchem_cid=None, identity_patents=0, substructure_patents=1)
+    )
+
+    workflow = MoleculeGenerator(
+        groq_api_key="g-key",
+        boltz_client=boltz_client,
+        pubchem_service=pubchem_service,
+        settings=GeneratorSettings(BEST_STRUCTURE_AFFINITY_THRESHOLD=0.9),
+    )
+
+    report_path = asyncio.run(workflow.run(no_pocket_options))
+
+    assert report_path is not None
+    data_dir = Path(no_pocket_options.output_dir) / "best" / "candidate-0001" / "data"
+    metadata_path = data_dir / "metadata.json"
+    cif_path = data_dir / "structure.cif"
+    assert metadata_path.exists()
+    assert cif_path.exists()
+
+    metadata = metadata_path.read_text(encoding="utf-8")
+    assert '"smiles": "CCO"' in metadata
+    assert cif_path.read_text(encoding="utf-8") == "MOCK-MMCIF-CONTENT"

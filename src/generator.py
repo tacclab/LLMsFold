@@ -1,7 +1,9 @@
 """Core molecule generation loop and orchestration."""
 
+import json
 import re
 import subprocess
+from pathlib import Path
 from functools import lru_cache
 from time import perf_counter
 from typing import Any
@@ -33,13 +35,20 @@ from src.core.logging import get_logger
 from src.core.messages import (
     invalid_smiles,
     no_molecules_generated,
+    persist_structure_unavailable,
     pocket_detection_unavailable,
 )
 from src.core.progress import gather_with_progress, make_progress_bar
 from src.nvidia_client import BoltzClient
 from src.pocket import get_binding_pockets_and_residues
 from src.prompt import MODEL_SYSTEM_PROMPT, build_user_prompt
-from src.schemas import PipelineOptions, PocketContact, ScoredMoleculeRecord, UnifiedReportRow
+from src.schemas import (
+    BestStructureRecord,
+    PipelineOptions,
+    PocketContact,
+    ScoredMoleculeRecord,
+    UnifiedReportRow,
+)
 from src.services import PubChemService
 
 logger = get_logger(__name__)
@@ -78,6 +87,7 @@ class MoleculeGenerator:
         self._llm_temperature = llm_temperature
         self._adj_affinity_threshold = self._settings.adj_affinity_threshold
         self._sas_score_max = self._settings.sas_score_max
+        self._best_structure_affinity_threshold = self._settings.best_structure_affinity_threshold
 
     @staticmethod
     def _extract_residue_contacts(pocket_residues: str | list[str] | None) -> list[PocketContact]:
@@ -120,6 +130,71 @@ class MoleculeGenerator:
         )
         enriched["score"] = enriched.apply(calculate_heuristic_score, axis=1)
         return enriched
+
+    @staticmethod
+    def _candidate_id(index: int) -> str:
+        """Builds a human-friendly candidate id from 1-based rank."""
+
+        return f"candidate-{index:04d}"
+
+    @staticmethod
+    def _persist_best_structures(
+        best_structures_by_smiles: dict[str, BestStructureRecord],
+        final_hits: pd.DataFrame,
+        output_dir: Path,
+        threshold: float | None,
+    ) -> int:
+        """Persists docked structures for high-affinity molecules when enabled."""
+
+        if threshold is None:
+            return 0
+
+        base_dir = output_dir / "best"
+        saved_count = 0
+        skipped_low_affinity = 0
+        for row in final_hits.to_dict("records"):
+            affinity = float(row.get("Affinity_Prob", 0.0))
+            smiles = str(row.get("SMILES", ""))
+            candidate_id = str(row.get("Candidate_ID", ""))
+            if not smiles or not candidate_id:
+                continue
+            if affinity <= threshold:
+                logger.info(
+                    "Skipping structure save for %s: Affinity_Prob=%.3f <= BEST_STRUCTURE_AFFINITY_THRESHOLD=%.3f",
+                    candidate_id,
+                    affinity,
+                    threshold,
+                )
+                skipped_low_affinity += 1
+                continue
+
+            structure = best_structures_by_smiles.get(smiles)
+            if structure is None:
+                logger.warning(persist_structure_unavailable(smiles, candidate_id))
+                continue
+
+            data_dir = base_dir / candidate_id / "data"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            metadata = {
+                "candidate_id": candidate_id,
+                "smiles": smiles,
+                "affinity_prob": affinity,
+            }
+            (data_dir / "metadata.json").write_text(
+                json.dumps(metadata, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+            (data_dir / "structure.cif").write_text(structure.structure, encoding="utf-8")
+            saved_count += 1
+
+        if skipped_low_affinity:
+            logger.info(
+                "%s structure(s) skipped: Affinity_Prob below BEST_STRUCTURE_AFFINITY_THRESHOLD=%.3f. "
+                "Lower BEST_STRUCTURE_AFFINITY_THRESHOLD in .env to save more structures.",
+                skipped_low_affinity,
+                threshold,
+            )
+        return saved_count
 
     @staticmethod
     def _post_process_scores(
@@ -243,6 +318,7 @@ class MoleculeGenerator:
                 options.max_samples,
             )
             global_registry: list[ScoredMoleculeRecord] = []
+            best_structures_by_smiles: dict[str, BestStructureRecord] = {}
             with make_progress_bar(
                 total=options.max_iterations,
                 desc="Iterations",
@@ -308,11 +384,16 @@ class MoleculeGenerator:
                             len(new_smiles),
                         )
 
-                        results_df = await self._boltz_client.compute_properties(
+                        results_df, best_structures = await self._boltz_client.compute_properties(
                             valid_smiles,
                             options.protein_sequence,
                             pocket_residues=residue_contacts if use_pocket_data else None,
                         )
+
+                        for item in best_structures:
+                            existing = best_structures_by_smiles.get(item.smiles)
+                            if existing is None or item.affinity_prob > existing.affinity_prob:
+                                best_structures_by_smiles[item.smiles] = item
 
                         enriched = self._enrich_scores(
                             results_df,
@@ -413,6 +494,9 @@ class MoleculeGenerator:
                 .sort_values(by=["_pubchem_known_rank", "score"], ascending=[True, False])
                 .drop(columns=["_pubchem_known_rank"])
             )
+            final_hits["Candidate_ID"] = [
+                self._candidate_id(index) for index in range(1, len(final_hits) + 1)
+            ]
             final_hits = pd.DataFrame.from_records(
                 [
                     UnifiedReportRow.model_validate(row).model_dump()
@@ -433,14 +517,21 @@ class MoleculeGenerator:
             options.output_dir.mkdir(parents=True, exist_ok=True)
             report_path = options.output_dir / UNIFIED_REPORT_FILENAME
             final_hits.to_csv(report_path, index=False)
+            saved_structures = self._persist_best_structures(
+                best_structures_by_smiles,
+                final_hits,
+                options.output_dir,
+                self._best_structure_affinity_threshold,
+            )
             step_progress.update(1)
             step_progress.set_postfix_str("report written")
             logger.info(
-                "Step 5/%s complete in %.2fs: wrote %s rows to %s",
+                "Step 5/%s complete in %.2fs: wrote %s rows to %s (best_structures_saved=%s)",
                 total_steps,
                 perf_counter() - step_started_at,
                 len(final_hits),
                 report_path,
+                saved_structures,
             )
             logger.info("Workflow Complete. Results in %s", report_path)
             return str(report_path)

@@ -90,6 +90,7 @@ def test_boltz_prediction_ignores_extra_fields() -> None:
 
     parsed = BoltzPrediction.model_validate(
         {
+            "structures": [{"structure": "data_\nloop_", "format": "mmcif"}],
             "ptm_scores": [0.9],
             "iptm_scores": [0.8],
             "confidence_scores": [0.7],
@@ -107,13 +108,38 @@ def test_boltz_prediction_ignores_extra_fields() -> None:
 
     assert parsed.ptm_scores == [0.9]
     assert parsed.affinities["L1"].affinity_pic50 == [7.2]
+    assert parsed.structures[0].structure == "data_\nloop_"
 
 
-def test_boltz_prediction_requires_score_fields() -> None:
-    """Malformed Boltz payloads should fail validation instead of zero-filling."""
+def test_boltz_prediction_rejects_invalid_structure_entry() -> None:
+    """Structure entries missing the required 'structure' field should fail validation."""
 
     with pytest.raises(ValidationError):
-        BoltzPrediction.model_validate({"affinities": {}})
+        BoltzPrediction.model_validate(
+            {
+                "structures": [{"format": "mmcif"}],  # missing required 'structure' field
+                "confidence_scores": [0.7],
+            }
+        )
+
+
+def test_boltz_prediction_affinity_new_fields_optional() -> None:
+    """All new affinity sub-fields default to empty lists when absent."""
+
+    parsed = BoltzPrediction.model_validate(
+        {
+            "structures": [{"structure": "data_", "format": "mmcif"}],
+            "confidence_scores": [0.7],
+            "affinities": {"L1": {"affinity_probability_binary": [0.8]}},
+        }
+    )
+
+    aff = parsed.affinities["L1"]
+    assert aff.affinity_probability_binary == [0.8]
+    assert aff.affinity_pred_value == []
+    assert aff.affinity_pic50 == []
+    assert aff.model_1_affinity_probability_binary == []
+    assert aff.model_2_affinity_probability_binary == []
 
 
 def test_model_output_from_raw_payload_filters_invalid_and_duplicate_smiles() -> None:
