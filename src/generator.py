@@ -283,6 +283,7 @@ class MoleculeGenerator:
                     pocket_coords, pocket_residues = get_binding_pockets_and_residues(
                         options.pdb_path,
                         options.output_dir,
+                        backend="deepchem",
                     )
                 except (PocketDetectionError, subprocess.SubprocessError) as exc:
                     logger.warning(pocket_detection_unavailable(exc))
