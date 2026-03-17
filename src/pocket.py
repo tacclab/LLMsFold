@@ -4,6 +4,7 @@ import glob
 import os
 import stat
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -121,6 +122,34 @@ def _select_pocket(
     return max(pockets, key=_pocket_volume)
 
 
+def _pick_pocket_id_from_cli(pocket_data: list[dict[str, float]]) -> int | None:
+    """Prompts interactive users to choose a pocket id, defaulting to largest pocket."""
+
+    if not sys.stdin.isatty() or not pocket_data:
+        return None
+
+    suggested = max(pocket_data, key=lambda row: row["volume_approx"])
+    suggested_id = int(suggested["pocket_id"])
+    response = input(
+        f"Suggested pocket id: {suggested_id} (largest volume). "
+        "Press Enter to accept or type another pocket id: "
+    ).strip()
+    if not response:
+        return suggested_id
+
+    try:
+        selected_id = int(response)
+    except ValueError:
+        logger.warning("Invalid pocket id '%s'; using suggested pocket id %s.", response, suggested_id)
+        return suggested_id
+
+    if any(int(row["pocket_id"]) == selected_id for row in pocket_data):
+        return selected_id
+
+    logger.warning("Pocket id %s not found; using suggested pocket id %s.", selected_id, suggested_id)
+    return suggested_id
+
+
 def get_binding_pockets_and_residues(
     pdb_path: str | Path,
     output_dir: str | Path = "results",
@@ -170,7 +199,11 @@ def get_binding_pockets_and_residues(
     os.makedirs(output_dir, exist_ok=True)
     pd.DataFrame(pocket_data).to_csv(os.path.join(output_dir, "all_pockets.csv"), index=False)
 
-    best_pocket = _select_pocket(pockets, pocket_data, pocket_index=pocket_index)
+    selected_pocket_id = _pick_pocket_id_from_cli(pocket_data)
+    if selected_pocket_id is not None:
+        best_pocket = pockets[selected_pocket_id - 1]
+    else:
+        best_pocket = _select_pocket(pockets, pocket_data, pocket_index=pocket_index)
     center = np.asarray(best_pocket.center(), dtype=float)
 
     pose_info: dict[str, float] = {
