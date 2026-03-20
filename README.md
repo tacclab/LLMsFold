@@ -175,6 +175,9 @@ Fill in API keys and adjust paths as needed.
 | `LLM_MODEL` | No | `llama-3.3-70b-versatile` | Groq model name |
 | `LLM_TEMPERATURE` | No | `0.8` | LLM temperature (`0.0` to `2.0`) |
 | `BEST_STRUCTURE_AFFINITY_THRESHOLD` | No | - | Save Boltz docked structures for candidates with `Affinity_Prob` above this threshold (`0.0` to `1.0`) |
+| `NEORALAB_VIEWER_URL` | No | `https://neoralab.app/viewer` | Viewer endpoint used for automatic best-result preview |
+| `NEORALAB_VIEWER_CLIENT_ID` | No | - | Client ID used to authenticate the automatic viewer preview |
+| `NEORALAB_VIEWER_CLIENT_SECRET` | No | - | Client secret used to authenticate the automatic viewer preview |
 | `BOLTZ_RETRY_ATTEMPTS` | No | `4` | Retry budget for Boltz HTTP `429` responses |
 | `BOLTZ_RETRY_MIN_WAIT_SECONDS` | No | `2.0` | Initial tenacity backoff for Boltz HTTP `429` responses |
 | `BOLTZ_RETRY_MAX_WAIT_SECONDS` | No | `30.0` | Maximum tenacity backoff for Boltz HTTP `429` responses |
@@ -201,8 +204,9 @@ uv run --env-file .env main.py --no-pocket
 ## Output
 Primary artifact: `results/unified_report.csv`
 
-Optional artifact (when `BEST_STRUCTURE_AFFINITY_THRESHOLD` is set):
+Optional artifacts (when `BEST_STRUCTURE_AFFINITY_THRESHOLD` is set):
 - `results/best/<candidate-id>/data/metadata.json` containing the candidate `smiles`, Boltz `evaluation`, `pdb`, and `structure` payload for high-affinity hits.
+- `results/best/<candidate-id>/preview/neoralab_viewer_autoload.html` when `NEORALAB_VIEWER_CLIENT_ID` and `NEORALAB_VIEWER_CLIENT_SECRET` are configured; opening this file auto-submits the saved `metadata.json` and `structure.cif` to the NeoraLab viewer.
 
 Important columns include:
 - Activity/confidence: `Affinity_Prob`, `pIC50`, `IC50_uM`, `pTM`, `ipTM`, `pLDDT`

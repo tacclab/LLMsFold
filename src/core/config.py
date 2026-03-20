@@ -65,6 +65,18 @@ class GeneratorSettings(BaseSettings):
         ge=0.0,
         le=1.0,
     )
+    neoralab_viewer_url: str = Field(
+        default="https://neoralab.app/viewer",
+        alias="NEORALAB_VIEWER_URL",
+    )
+    neoralab_viewer_client_id: str | None = Field(
+        default=None,
+        alias="NEORALAB_VIEWER_CLIENT_ID",
+    )
+    neoralab_viewer_client_secret: SecretStr | None = Field(
+        default=None,
+        alias="NEORALAB_VIEWER_CLIENT_SECRET",
+    )
     groq_api_key: SecretStr | None = Field(default=None, alias="GROQ_API_KEY")
     boltz_request_timeout_seconds: float = Field(
         default=DEFAULT_BOLTZ_REQUEST_TIMEOUT_SECONDS,

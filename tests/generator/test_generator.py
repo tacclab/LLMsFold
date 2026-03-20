@@ -142,7 +142,7 @@ def test_run_full_workflow_generates_report(
     monkeypatch.setattr(
         generator,
         "get_binding_pockets_and_residues",
-        lambda *_args, **_kwargs: ("Center", "ALA10_A, LYS12_A"),
+        lambda *_args, **_kwargs: ("Center", "ALA10_A, LYS12_A", None),
     )
     monkeypatch.setattr(generator, "parse_smiles_from_text", lambda _raw: ["CCO"])
     monkeypatch.setattr(generator, "passes_lipinski", lambda _mol: True)
@@ -428,3 +428,97 @@ def test_run_saves_best_structure_payload_above_threshold(
     metadata = metadata_path.read_text(encoding="utf-8")
     assert '"smiles": "CCO"' in metadata
     assert cif_path.read_text(encoding="utf-8") == "MOCK-MMCIF-CONTENT"
+
+
+def test_create_viewer_launcher_embeds_credentials_and_payloads(tmp_path: Path) -> None:
+    """Viewer launcher should post saved auth, metadata, and structure payloads."""
+
+    output_dir = tmp_path / "results"
+    data_dir = output_dir / "best" / "candidate-0001" / "data"
+    data_dir.mkdir(parents=True)
+    metadata_path = data_dir / "metadata.json"
+    structure_path = data_dir / "structure.cif"
+    metadata_path.write_text('{"smiles":"CCO"}', encoding="utf-8")
+    structure_path.write_text("data_mock", encoding="utf-8")
+
+    launcher_path = MoleculeGenerator._create_viewer_launcher(
+        output_dir=output_dir,
+        viewer_url="https://neoralab.app/viewer",
+        client_id="client-123",
+        client_secret="secret-456",
+        candidate_id="candidate-0001",
+        metadata_path=metadata_path,
+        structure_path=structure_path,
+    )
+
+    content = launcher_path.read_text(encoding="utf-8")
+    assert 'action="https://neoralab.app/viewer"' in content
+    assert 'name="client_id" value="client-123"' in content
+    assert 'name="client_secret" value="secret-456"' in content
+    assert 'name="metadata"' in content
+    assert '{&quot;smiles&quot;:&quot;CCO&quot;}' in content
+    assert 'name="cif"' in content
+    assert 'data_mock' in content
+
+
+def test_launch_best_result_viewer_opens_launcher_when_best_structure_exists(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Configured viewer credentials should open a launcher for the top-ranked saved result."""
+
+    output_dir = tmp_path / "results"
+    data_dir = output_dir / "best" / "candidate-0001" / "data"
+    data_dir.mkdir(parents=True)
+    (data_dir / "metadata.json").write_text('{"smiles":"CCO"}', encoding="utf-8")
+    (data_dir / "structure.cif").write_text("data_mock", encoding="utf-8")
+
+    opened: list[tuple[str, int]] = []
+    monkeypatch.setattr(generator.webbrowser, "open", lambda url, new=0: opened.append((url, new)) or True)
+
+    workflow = MoleculeGenerator(
+        groq_api_key="g-key",
+        boltz_client=MagicMock(),
+        pubchem_service=MagicMock(),
+        settings=GeneratorSettings(
+            NEORALAB_VIEWER_CLIENT_ID="client-123",
+            NEORALAB_VIEWER_CLIENT_SECRET="secret-456",
+        ),
+    )
+
+    launcher_path = workflow._launch_best_result_viewer(
+        output_dir,
+        pd.DataFrame([{"Candidate_ID": "candidate-0001"}]),
+    )
+
+    assert launcher_path is not None
+    assert launcher_path.exists()
+    assert opened == [(launcher_path.resolve().as_uri(), 2)]
+
+
+def test_launch_best_result_viewer_skips_when_best_structure_artifacts_are_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Viewer auto-preview should not open when the best candidate was not persisted."""
+
+    open_mock = MagicMock(return_value=True)
+    monkeypatch.setattr(generator.webbrowser, "open", open_mock)
+
+    workflow = MoleculeGenerator(
+        groq_api_key="g-key",
+        boltz_client=MagicMock(),
+        pubchem_service=MagicMock(),
+        settings=GeneratorSettings(
+            NEORALAB_VIEWER_CLIENT_ID="client-123",
+            NEORALAB_VIEWER_CLIENT_SECRET="secret-456",
+        ),
+    )
+
+    launcher_path = workflow._launch_best_result_viewer(
+        tmp_path / "results",
+        pd.DataFrame([{"Candidate_ID": "candidate-0001"}]),
+    )
+
+    assert launcher_path is None
+    open_mock.assert_not_called()
