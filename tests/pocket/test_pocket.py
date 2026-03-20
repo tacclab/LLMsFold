@@ -341,3 +341,76 @@ def test_get_binding_pockets_and_residues_handles_unreadable_pdb(
         "size_y": 1.0,
         "size_z": 1.0,
     }
+
+
+def test_pick_pocket_id_from_cli_returns_none_without_tty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-interactive runs skip interactive pocket selection."""
+
+    monkeypatch.setattr(pocket.sys.stdin, "isatty", lambda: False)
+    assert pocket._pick_pocket_id_from_cli([{"pocket_id": 1.0, "volume_approx": 8.0}]) is None
+
+
+def test_pick_pocket_id_from_cli_uses_suggested_when_enter_pressed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Interactive prompt suggests largest pocket and accepts Enter default."""
+
+    monkeypatch.setattr(pocket.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "")
+    pocket_data = [
+        {"pocket_id": 1.0, "volume_approx": 1.0},
+        {"pocket_id": 2.0, "volume_approx": 8.0},
+    ]
+
+    assert pocket._pick_pocket_id_from_cli(pocket_data) == 2
+
+
+def test_pick_pocket_id_from_cli_accepts_valid_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Users can override suggested pocket by entering another valid pocket id."""
+
+    monkeypatch.setattr(pocket.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "1")
+    pocket_data = [
+        {"pocket_id": 1.0, "volume_approx": 1.0},
+        {"pocket_id": 2.0, "volume_approx": 8.0},
+    ]
+
+    assert pocket._pick_pocket_id_from_cli(pocket_data) == 1
+
+
+def test_get_binding_pockets_and_residues_uses_cli_selected_pocket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Interactive selection chooses requested pocket id instead of configured index."""
+
+    first = DummyPocket(center=(1.0, 1.0, 1.0), spans=(1.0, 1.0, 1.0))
+    second = DummyPocket(center=(9.0, 9.0, 9.0), spans=(2.0, 2.0, 2.0))
+    finder_instance = MagicMock()
+    finder_instance.find_pockets.return_value = [first, second]
+    finder_cls = MagicMock(return_value=finder_instance)
+    fake_deepchem = types.SimpleNamespace(
+        dock=types.SimpleNamespace(ConvexHullPocketFinder=finder_cls),
+    )
+    monkeypatch.setitem(__import__("sys").modules, "deepchem", fake_deepchem)
+
+    monkeypatch.setattr(pocket.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "2")
+    monkeypatch.setattr(
+        pocket,
+        "_select_pocket",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected fallback")),
+    )
+    monkeypatch.setattr(pocket.Chem, "MolFromPDBFile", lambda _path: None)
+
+    center, residues, box_dims = pocket.get_binding_pockets_and_residues(
+        "protein.pdb",
+        backend="deepchem",
+    )
+
+    assert center == "Center: 9.00, 9.00, 9.00"
+    assert residues == "Unknown"
+    assert box_dims is not None
