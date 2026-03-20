@@ -5,6 +5,8 @@
 
 LLMsFold is an automated molecule generation pipeline for early drug discovery. It combines LLM-driven proposal generation with NVIDIA Boltz scoring, chemistry filters, and PubChem novelty checks.
 
+Core LLMsFold runs entirely on its own and produces ranked candidate outputs locally. Optionally, users can connect the NeoraLab platform by NeoraLab company to automatically publish and view the best saved candidate in the NeoraLab viewer.
+
 ## Authors
 
 - W. W. Waththe Liyanage `†`  
@@ -162,7 +164,7 @@ cp .env.example .env
 ```
 Fill in API keys and adjust paths as needed.
 
-## Configuration
+## Core Configuration
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
 | `GROQ_API_KEY` | Yes | - | Groq API key for LLM generation |
@@ -175,17 +177,26 @@ Fill in API keys and adjust paths as needed.
 | `LLM_MODEL` | No | `llama-3.3-70b-versatile` | Groq model name |
 | `LLM_TEMPERATURE` | No | `0.8` | LLM temperature (`0.0` to `2.0`) |
 | `BEST_STRUCTURE_AFFINITY_THRESHOLD` | No | - | Save Boltz docked structures for candidates with `Affinity_Prob` above this threshold (`0.0` to `1.0`) |
-| `NEORALAB_API_BASE_URL` | No | `https://neoralab.app` | NeoraLab backend base URL used for OAuth and repository upload |
-| `NEORALAB_VIEWER_URL` | No | `https://neoralab.app/app/viewer` | Viewer endpoint used for automatic best-result preview |
-| `NEORALAB_VIEWER_CLIENT_ID` | No | - | Client ID used to authenticate the automatic viewer preview |
-| `NEORALAB_VIEWER_CLIENT_SECRET` | No | - | Client secret used to authenticate the automatic viewer preview |
 | `BOLTZ_RETRY_ATTEMPTS` | No | `4` | Retry budget for Boltz HTTP `429` responses |
 | `BOLTZ_RETRY_MIN_WAIT_SECONDS` | No | `2.0` | Initial tenacity backoff for Boltz HTTP `429` responses |
 | `BOLTZ_RETRY_MAX_WAIT_SECONDS` | No | `30.0` | Maximum tenacity backoff for Boltz HTTP `429` responses |
 | `LOG_LEVEL` | No | `INFO` | Logging level |
 
 ## Optional NeoraLab Viewer Integration
-If you want LLMsFold to automatically publish the top saved result to NeoraLab and open it in the NeoraLab viewer, configure the optional NeoraLab variables in `.env`.
+This integration is separate from the core LLMsFold pipeline.
+
+You only need this if you want LLMsFold to automatically publish the best saved result to the NeoraLab platform by NeoraLab company and open it in the NeoraLab viewer. If you do not configure it, LLMsFold still runs normally and keeps all outputs local.
+
+### Optional NeoraLab environment variables
+Add these variables to `.env` only if you want to enable the NeoraLab upload and viewer flow:
+
+| Variable | Required for NeoraLab flow | Default | Description |
+| --- | --- | --- | --- |
+| `BEST_STRUCTURE_AFFINITY_THRESHOLD` | Yes | - | Saves Boltz docked structures for candidates with `Affinity_Prob` above this threshold. This must be set or there is no saved structure to upload. |
+| `NEORALAB_API_BASE_URL` | Yes | `https://neoralab.app` | NeoraLab backend base URL used for OAuth and repository upload. |
+| `NEORALAB_VIEWER_URL` | Yes | `https://neoralab.app/app/viewer` | NeoraLab viewer URL used for automatic best-result preview. |
+| `NEORALAB_VIEWER_CLIENT_ID` | Yes | - | Client ID used to authenticate the optional viewer upload flow. |
+| `NEORALAB_VIEWER_CLIENT_SECRET` | Yes | - | Client secret used to authenticate the optional viewer upload flow. |
 
 ### 1. Create or request a NeoraLab account
 Open `https://www.neoralab.com/signin` from the NeoraLab `Get started` flow and sign in with your workspace account.
@@ -262,6 +273,23 @@ Important columns include:
 - Activity/confidence: `Affinity_Prob`, `pIC50`, `IC50_uM`, `pTM`, `ipTM`, `pLDDT`
 - Drug-like properties: `MolWt`, `LogP`, `QED`, `SAS`, `TPSA`, `H_Acceptors`, `H_Donors`
 - Ranking/novelty: `MaxSim`, `adj_affinity`, `score`, `PubChem_CID`, `PubChem_Known`
+
+## Optional External Viewer: NeoraLab Platform
+
+This section describes an optional integration. It is not required to run LLMsFold.
+
+If desired, users can use the NeoraLab platform by NeoraLab company to upload and inspect the best saved candidate in a hosted molecular viewer. This is a separate post-processing step on top of the standard LLMsFold pipeline.
+
+Without NeoraLab configured:
+- LLMsFold still completes normally.
+- All core generation, Boltz scoring, filtering, ranking, and CSV export remain available locally.
+- No external upload or viewer redirect is attempted.
+
+With NeoraLab configured:
+- LLMsFold uploads the top-ranked saved structure to the NeoraLab repository.
+- It then opens that result in the NeoraLab viewer for inspection.
+
+See `Optional NeoraLab Viewer Integration` above for the required environment variables and setup steps.
 
 ## Documentation
 - Docs index: `doc/README.md`
