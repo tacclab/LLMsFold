@@ -175,13 +175,60 @@ Fill in API keys and adjust paths as needed.
 | `LLM_MODEL` | No | `llama-3.3-70b-versatile` | Groq model name |
 | `LLM_TEMPERATURE` | No | `0.8` | LLM temperature (`0.0` to `2.0`) |
 | `BEST_STRUCTURE_AFFINITY_THRESHOLD` | No | - | Save Boltz docked structures for candidates with `Affinity_Prob` above this threshold (`0.0` to `1.0`) |
-| `NEORALAB_VIEWER_URL` | No | `https://neoralab.app/viewer` | Viewer endpoint used for automatic best-result preview |
+| `NEORALAB_API_BASE_URL` | No | `https://neoralab.app` | NeoraLab backend base URL used for OAuth and repository upload |
+| `NEORALAB_VIEWER_URL` | No | `https://neoralab.app/app/viewer` | Viewer endpoint used for automatic best-result preview |
 | `NEORALAB_VIEWER_CLIENT_ID` | No | - | Client ID used to authenticate the automatic viewer preview |
 | `NEORALAB_VIEWER_CLIENT_SECRET` | No | - | Client secret used to authenticate the automatic viewer preview |
 | `BOLTZ_RETRY_ATTEMPTS` | No | `4` | Retry budget for Boltz HTTP `429` responses |
 | `BOLTZ_RETRY_MIN_WAIT_SECONDS` | No | `2.0` | Initial tenacity backoff for Boltz HTTP `429` responses |
 | `BOLTZ_RETRY_MAX_WAIT_SECONDS` | No | `30.0` | Maximum tenacity backoff for Boltz HTTP `429` responses |
 | `LOG_LEVEL` | No | `INFO` | Logging level |
+
+## Optional NeoraLab Viewer Integration
+If you want LLMsFold to automatically publish the top saved result to NeoraLab and open it in the NeoraLab viewer, configure the optional NeoraLab variables in `.env`.
+
+### 1. Create or request a NeoraLab account
+Open `https://www.neoralab.com/signin` from the NeoraLab `Get started` flow and sign in with your workspace account.
+
+If your workspace does not expose self-service registration, request access from your NeoraLab administrator or contact `contact@neoralab.com`.
+
+### 2. Create a client-credentials app in NeoraLab
+Inside NeoraLab, create an OAuth client that is allowed to use the `client_credentials` grant.
+
+You will need the generated:
+- `client_id`
+- `client_secret`
+
+Store the secret immediately when it is shown. LLMsFold uses these credentials to obtain an access token from `/oauth/token` and upload viewer payloads to the NeoraLab repository API.
+
+### 3. Configure the repository
+Add the NeoraLab settings to `.env`:
+
+```bash
+BEST_STRUCTURE_AFFINITY_THRESHOLD=0.03
+NEORALAB_API_BASE_URL=https://neoralab.app
+NEORALAB_VIEWER_URL=https://neoralab.app/app/viewer
+NEORALAB_VIEWER_CLIENT_ID=your-client-id
+NEORALAB_VIEWER_CLIENT_SECRET=your-client-secret
+```
+
+Notes:
+- `BEST_STRUCTURE_AFFINITY_THRESHOLD` must be set, otherwise no Boltz structures are persisted and there is nothing to upload to NeoraLab.
+- `NEORALAB_API_BASE_URL` should point to the backend that serves `/oauth/token` and `/api/v1/repository/`.
+- `NEORALAB_VIEWER_URL` is the UI route that will be opened after a successful upload.
+- Keep `NEORALAB_VIEWER_CLIENT_SECRET` private and never commit it to version control.
+
+### 4. What happens during a run
+When these settings are configured, LLMsFold does the following at the end of the pipeline:
+
+1. It writes `results/unified_report.csv` as usual.
+2. It saves Boltz docked structures for candidates whose `Affinity_Prob` is greater than `BEST_STRUCTURE_AFFINITY_THRESHOLD` under `results/best/<candidate-id>/data/`.
+3. It selects the top-ranked saved candidate.
+4. It authenticates against NeoraLab with the configured `client_id` and `client_secret`.
+5. It uploads `metadata.json` and `structure.cif` as a NeoraLab repository item of type `viewer`.
+6. It builds a deep link to the NeoraLab viewer and tries to open it in your browser automatically.
+
+If the NeoraLab credentials are not configured, the pipeline still runs normally; only the NeoraLab upload and auto-open step is skipped.
 
 ## Usage
 ### Run with uv
@@ -206,7 +253,10 @@ Primary artifact: `results/unified_report.csv`
 
 Optional artifacts (when `BEST_STRUCTURE_AFFINITY_THRESHOLD` is set):
 - `results/best/<candidate-id>/data/metadata.json` containing the candidate `smiles`, Boltz `evaluation`, `pdb`, and `structure` payload for high-affinity hits.
-- `results/best/<candidate-id>/preview/neoralab_viewer_autoload.html` when `NEORALAB_VIEWER_CLIENT_ID` and `NEORALAB_VIEWER_CLIENT_SECRET` are configured; opening this file auto-submits the saved `metadata.json` and `structure.cif` to the NeoraLab viewer.
+
+Optional NeoraLab behavior (when `NEORALAB_VIEWER_CLIENT_ID` and `NEORALAB_VIEWER_CLIENT_SECRET` are configured):
+- LLMsFold uploads the top-ranked saved result to the NeoraLab repository as a viewer item.
+- LLMsFold then opens the NeoraLab viewer URL for that uploaded item in your default browser.
 
 Important columns include:
 - Activity/confidence: `Affinity_Prob`, `pIC50`, `IC50_uM`, `pTM`, `ipTM`, `pLDDT`

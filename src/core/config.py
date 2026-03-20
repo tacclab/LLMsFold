@@ -3,7 +3,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from src.core.constants import (
@@ -65,8 +65,12 @@ class GeneratorSettings(BaseSettings):
         ge=0.0,
         le=1.0,
     )
+    neoralab_api_base_url: str = Field(
+        default="https://neoralab.app",
+        validation_alias=AliasChoices("NEORALAB_API_BASE_URL", "NEORALAB_BASE_URL"),
+    )
     neoralab_viewer_url: str = Field(
-        default="https://neoralab.app/viewer",
+        default="https://neoralab.app/app/viewer",
         alias="NEORALAB_VIEWER_URL",
     )
     neoralab_viewer_client_id: str | None = Field(

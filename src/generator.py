@@ -1,6 +1,5 @@
 """Core molecule generation loop and orchestration."""
 
-import html
 import json
 import re
 import subprocess
@@ -51,7 +50,7 @@ from src.schemas import (
     ScoredMoleculeRecord,
     UnifiedReportRow,
 )
-from src.services import PubChemService
+from src.services import NeoraLabViewerService, PubChemService
 
 logger = get_logger(__name__)
 
@@ -139,68 +138,8 @@ class MoleculeGenerator:
 
         return f"candidate-{index:04d}"
 
-    @staticmethod
-    def _create_viewer_launcher(
-        output_dir: Path,
-        viewer_url: str,
-        client_id: str,
-        client_secret: str,
-        candidate_id: str,
-        metadata_path: Path,
-        structure_path: Path,
-    ) -> Path:
-        """Creates a local HTML launcher that auto-submits the best result to NeoraLab Viewer."""
-
-        launcher_dir = output_dir / "best" / candidate_id / "preview"
-        launcher_dir.mkdir(parents=True, exist_ok=True)
-        launcher_path = launcher_dir / "neoralab_viewer_autoload.html"
-        metadata = metadata_path.read_text(encoding="utf-8")
-        structure = structure_path.read_text(encoding="utf-8")
-        escaped_url = html.escape(viewer_url, quote=True)
-        escaped_candidate = html.escape(candidate_id)
-        escaped_metadata = html.escape(metadata)
-        escaped_structure = html.escape(structure)
-        escaped_client_id = html.escape(client_id, quote=True)
-        escaped_client_secret = html.escape(client_secret, quote=True)
-        launcher_path.write_text(
-            f"""<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <title>LLMsFold → NeoraLab Viewer</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>
-      body {{ font-family: Arial, sans-serif; margin: 2rem; line-height: 1.5; }}
-      code, pre, textarea {{ font-family: ui-monospace, SFMono-Regular, monospace; }}
-      textarea {{ width: 100%; min-height: 10rem; }}
-    </style>
-  </head>
-  <body>
-    <h1>Opening NeoraLab Viewer…</h1>
-    <p>Submitting best result <strong>{escaped_candidate}</strong> to <code>{escaped_url}</code>.</p>
-    <p>If your browser blocks auto-submit, click <button id="submit" type="button">Open viewer</button>.</p>
-    <form id="viewer-form" action="{escaped_url}" method="post">
-      <input type="hidden" name="client_id" value="{escaped_client_id}">
-      <input type="hidden" name="client_secret" value="{escaped_client_secret}">
-      <input type="hidden" name="candidate_id" value="{escaped_candidate}">
-      <textarea hidden name="metadata">{escaped_metadata}</textarea>
-      <textarea hidden name="cif">{escaped_structure}</textarea>
-    </form>
-    <script>
-      const form = document.getElementById("viewer-form");
-      const submit = () => form.requestSubmit ? form.requestSubmit() : form.submit();
-      document.getElementById("submit").addEventListener("click", submit);
-      window.addEventListener("load", submit, {{ once: true }});
-    </script>
-  </body>
-</html>
-""",
-            encoding="utf-8",
-        )
-        return launcher_path
-
-    def _launch_best_result_viewer(self, output_dir: Path, final_hits: pd.DataFrame) -> Path | None:
-        """Opens the top-ranked saved structure in NeoraLab Viewer when configured."""
+    async def _launch_best_result_viewer(self, output_dir: Path, final_hits: pd.DataFrame) -> str | None:
+        """Uploads the top-ranked saved structure to NeoraLab and opens the viewer."""
 
         client_id = self._settings.neoralab_viewer_client_id
         client_secret = self._settings.neoralab_viewer_client_secret
@@ -221,26 +160,33 @@ class MoleculeGenerator:
             )
             return None
 
-        launcher_path = self._create_viewer_launcher(
-            output_dir=output_dir,
+        viewer_service = NeoraLabViewerService(
+            self._settings.neoralab_api_base_url,
             viewer_url=self._settings.neoralab_viewer_url,
+        )
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        structure = structure_path.read_text(encoding="utf-8")
+        access_token = await viewer_service.authenticate(
             client_id=client_id,
             client_secret=client_secret.get_secret_value(),
-            candidate_id=best_candidate_id,
-            metadata_path=metadata_path,
-            structure_path=structure_path,
         )
-        launcher_url = launcher_path.resolve().as_uri()
-        opened = webbrowser.open(launcher_url, new=2)
+        item_id = await viewer_service.upload_viewer_payload(
+            access_token=access_token,
+            candidate_id=best_candidate_id,
+            metadata=metadata,
+            structure_content=structure,
+        )
+        viewer_url = viewer_service.build_viewer_url(item_id)
+        opened = webbrowser.open(viewer_url, new=2)
         if opened:
-            logger.info("Opened NeoraLab Viewer launcher for %s at %s", best_candidate_id, launcher_url)
+            logger.info("Opened NeoraLab Viewer for %s at %s", best_candidate_id, viewer_url)
         else:
             logger.warning(
-                "Created NeoraLab Viewer launcher for %s but could not open a browser automatically: %s",
+                "Uploaded NeoraLab Viewer payload for %s but could not open a browser automatically: %s",
                 best_candidate_id,
-                launcher_url,
+                viewer_url,
             )
-        return launcher_path
+        return viewer_url
 
     @staticmethod
     def _persist_best_structures(
@@ -643,7 +589,7 @@ class MoleculeGenerator:
                 self._best_structure_affinity_threshold,
                 selected_pocket_metadata,
             )
-            viewer_launcher = self._launch_best_result_viewer(options.output_dir, final_hits)
+            viewer_launcher = await self._launch_best_result_viewer(options.output_dir, final_hits)
             step_progress.update(1)
             step_progress.set_postfix_str("report written")
             logger.info(

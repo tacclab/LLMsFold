@@ -1,6 +1,7 @@
 """Tests for molecule generation orchestration."""
 
 import asyncio
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -310,6 +311,58 @@ def test_run_uses_configured_llm_model_and_temperature(
     assert create_kwargs["temperature"] == pytest.approx(0.25)
 
 
+def test_launch_best_result_viewer_uploads_repository_payload(
+    tmp_path: Path,
+    generator_dependencies,
+) -> None:
+    """Viewer launch should authenticate, upload, and open the repository deep link."""
+
+    boltz_client = MagicMock()
+    workflow = MoleculeGenerator(
+        groq_api_key="g-key",
+        boltz_client=boltz_client,
+        pubchem_service=MagicMock(),
+        settings=GeneratorSettings(
+            neoralab_api_base_url="https://neoralab.app",
+            neoralab_viewer_url="https://neoralab.app/app/viewer",
+            neoralab_viewer_client_id="client-id",
+            neoralab_viewer_client_secret="client-secret",
+        ),
+    )
+
+    candidate_dir = tmp_path / "best" / "candidate-0001" / "data"
+    candidate_dir.mkdir(parents=True)
+    (candidate_dir / "metadata.json").write_text(
+        json.dumps({"candidate_id": "candidate-0001", "smiles": "CCO"}),
+        encoding="utf-8",
+    )
+    (candidate_dir / "structure.cif").write_text("data_candidate\n_atom_site", encoding="utf-8")
+
+    final_hits = pd.DataFrame([{"Candidate_ID": "candidate-0001"}])
+
+    fake_service = MagicMock()
+    fake_service.authenticate = AsyncMock(return_value="access-token")
+    fake_service.upload_viewer_payload = AsyncMock(return_value="item-123")
+    fake_service.build_viewer_url.return_value = "https://neoralab.app/app/viewer?item=item-123"
+
+    original_service = generator.NeoraLabViewerService
+    original_open = generator.webbrowser.open
+    generator.NeoraLabViewerService = MagicMock(return_value=fake_service)
+    generator.webbrowser.open = MagicMock(return_value=True)
+    try:
+        result = asyncio.run(workflow._launch_best_result_viewer(tmp_path, final_hits))
+    finally:
+        generator.NeoraLabViewerService = original_service
+        generator.webbrowser.open = original_open
+
+    assert result == "https://neoralab.app/app/viewer?item=item-123"
+    fake_service.authenticate.assert_awaited_once_with(
+        client_id="client-id",
+        client_secret="client-secret",
+    )
+    fake_service.upload_viewer_payload.assert_awaited_once()
+
+
 def test_run_falls_back_when_pocket_detection_is_unavailable(
     pipeline_options,
     generator_dependencies,
@@ -413,7 +466,11 @@ def test_run_saves_best_structure_payload_above_threshold(
         groq_api_key="g-key",
         boltz_client=boltz_client,
         pubchem_service=pubchem_service,
-        settings=GeneratorSettings(BEST_STRUCTURE_AFFINITY_THRESHOLD=0.9),
+        settings=GeneratorSettings(
+            BEST_STRUCTURE_AFFINITY_THRESHOLD=0.9,
+            neoralab_viewer_client_id=None,
+            neoralab_viewer_client_secret=None,
+        ),
     )
 
     report_path = asyncio.run(workflow.run(no_pocket_options))
@@ -430,42 +487,11 @@ def test_run_saves_best_structure_payload_above_threshold(
     assert cif_path.read_text(encoding="utf-8") == "MOCK-MMCIF-CONTENT"
 
 
-def test_create_viewer_launcher_embeds_credentials_and_payloads(tmp_path: Path) -> None:
-    """Viewer launcher should post saved auth, metadata, and structure payloads."""
-
-    output_dir = tmp_path / "results"
-    data_dir = output_dir / "best" / "candidate-0001" / "data"
-    data_dir.mkdir(parents=True)
-    metadata_path = data_dir / "metadata.json"
-    structure_path = data_dir / "structure.cif"
-    metadata_path.write_text('{"smiles":"CCO"}', encoding="utf-8")
-    structure_path.write_text("data_mock", encoding="utf-8")
-
-    launcher_path = MoleculeGenerator._create_viewer_launcher(
-        output_dir=output_dir,
-        viewer_url="https://neoralab.app/viewer",
-        client_id="client-123",
-        client_secret="secret-456",
-        candidate_id="candidate-0001",
-        metadata_path=metadata_path,
-        structure_path=structure_path,
-    )
-
-    content = launcher_path.read_text(encoding="utf-8")
-    assert 'action="https://neoralab.app/viewer"' in content
-    assert 'name="client_id" value="client-123"' in content
-    assert 'name="client_secret" value="secret-456"' in content
-    assert 'name="metadata"' in content
-    assert '{&quot;smiles&quot;:&quot;CCO&quot;}' in content
-    assert 'name="cif"' in content
-    assert 'data_mock' in content
-
-
 def test_launch_best_result_viewer_opens_launcher_when_best_structure_exists(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Configured viewer credentials should open a launcher for the top-ranked saved result."""
+    """Configured viewer credentials should upload data and open the viewer deep link."""
 
     output_dir = tmp_path / "results"
     data_dir = output_dir / "best" / "candidate-0001" / "data"
@@ -476,24 +502,33 @@ def test_launch_best_result_viewer_opens_launcher_when_best_structure_exists(
     opened: list[tuple[str, int]] = []
     monkeypatch.setattr(generator.webbrowser, "open", lambda url, new=0: opened.append((url, new)) or True)
 
+    fake_service = MagicMock()
+    fake_service.authenticate = AsyncMock(return_value="access-token")
+    fake_service.upload_viewer_payload = AsyncMock(return_value="item-123")
+    fake_service.build_viewer_url.return_value = "https://neoralab.app/app/viewer?item=item-123"
+    monkeypatch.setattr(generator, "NeoraLabViewerService", MagicMock(return_value=fake_service))
+
     workflow = MoleculeGenerator(
         groq_api_key="g-key",
         boltz_client=MagicMock(),
         pubchem_service=MagicMock(),
         settings=GeneratorSettings(
-            NEORALAB_VIEWER_CLIENT_ID="client-123",
-            NEORALAB_VIEWER_CLIENT_SECRET="secret-456",
+            neoralab_api_base_url="https://neoralab.app",
+            neoralab_viewer_url="https://neoralab.app/app/viewer",
+            neoralab_viewer_client_id="client-123",
+            neoralab_viewer_client_secret="secret-456",
         ),
     )
 
-    launcher_path = workflow._launch_best_result_viewer(
-        output_dir,
-        pd.DataFrame([{"Candidate_ID": "candidate-0001"}]),
+    viewer_url = asyncio.run(
+        workflow._launch_best_result_viewer(
+            output_dir,
+            pd.DataFrame([{"Candidate_ID": "candidate-0001"}]),
+        )
     )
 
-    assert launcher_path is not None
-    assert launcher_path.exists()
-    assert opened == [(launcher_path.resolve().as_uri(), 2)]
+    assert viewer_url == "https://neoralab.app/app/viewer?item=item-123"
+    assert opened == [("https://neoralab.app/app/viewer?item=item-123", 2)]
 
 
 def test_launch_best_result_viewer_skips_when_best_structure_artifacts_are_missing(
@@ -510,15 +545,19 @@ def test_launch_best_result_viewer_skips_when_best_structure_artifacts_are_missi
         boltz_client=MagicMock(),
         pubchem_service=MagicMock(),
         settings=GeneratorSettings(
-            NEORALAB_VIEWER_CLIENT_ID="client-123",
-            NEORALAB_VIEWER_CLIENT_SECRET="secret-456",
+            neoralab_api_base_url="https://neoralab.app",
+            neoralab_viewer_url="https://neoralab.app/app/viewer",
+            neoralab_viewer_client_id="client-123",
+            neoralab_viewer_client_secret="secret-456",
         ),
     )
 
-    launcher_path = workflow._launch_best_result_viewer(
-        tmp_path / "results",
-        pd.DataFrame([{"Candidate_ID": "candidate-0001"}]),
+    viewer_url = asyncio.run(
+        workflow._launch_best_result_viewer(
+            tmp_path / "results",
+            pd.DataFrame([{"Candidate_ID": "candidate-0001"}]),
+        )
     )
 
-    assert launcher_path is None
+    assert viewer_url is None
     open_mock.assert_not_called()
