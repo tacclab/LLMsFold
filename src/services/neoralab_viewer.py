@@ -54,7 +54,9 @@ class NeoraLabViewerService:
         """Exchange client credentials for a NeoraLab access token."""
 
         try:
-            async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
+            async with httpx.AsyncClient(
+                timeout=self._timeout_seconds, follow_redirects=True
+            ) as client:
                 response = await client.post(
                     self._build_api_url("/oauth/token"),
                     data={
@@ -71,7 +73,21 @@ class NeoraLabViewerService:
                 f"NeoraLab authentication failed: {self._extract_error_message(response)}"
             )
 
-        payload = response.json()
+        raw = response.content
+        if not raw or not raw.strip():
+            raise RuntimeError(
+                "NeoraLab authentication failed: server returned an empty response "
+                f"(HTTP {response.status_code})."
+            )
+
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise RuntimeError(
+                f"NeoraLab authentication failed: could not parse server response as JSON "
+                f"(HTTP {response.status_code}): {response.text!r}"
+            ) from exc
+
         access_token = payload.get("access_token") if isinstance(payload, dict) else None
         if not isinstance(access_token, str) or not access_token.strip():
             raise RuntimeError("NeoraLab authentication failed: missing access token.")
@@ -111,7 +127,9 @@ class NeoraLabViewerService:
         }
 
         try:
-            async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
+            async with httpx.AsyncClient(
+                timeout=self._timeout_seconds, follow_redirects=True
+            ) as client:
                 response = await client.post(
                     self._build_api_url("/api/v1/repository/"),
                     headers={
@@ -129,7 +147,21 @@ class NeoraLabViewerService:
                 f"NeoraLab repository upload failed: {self._extract_error_message(response)}"
             )
 
-        body = response.json()
+        raw = response.content
+        if not raw or not raw.strip():
+            raise RuntimeError(
+                "NeoraLab repository upload failed: server returned an empty response "
+                f"(HTTP {response.status_code})."
+            )
+
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise RuntimeError(
+                f"NeoraLab repository upload failed: could not parse server response as JSON "
+                f"(HTTP {response.status_code}): {response.text!r}"
+            ) from exc
+
         item_id = body.get("id") if isinstance(body, dict) else None
         if not isinstance(item_id, str) or not item_id.strip():
             raise RuntimeError("NeoraLab repository upload failed: missing item id.")
