@@ -27,6 +27,7 @@ def fake_settings() -> SimpleNamespace:
         llm_model="llama-3.3-70b-versatile",
         llm_temperature=0.8,
         log_level="INFO",
+        random_seed=None,
         nvidia_api_key=secret("n-key"),
         groq_api_key=secret("g-key"),
     )
@@ -112,6 +113,7 @@ def test_main_happy_path_runs_generator_and_closes_clients(
     monkeypatch.setattr(main, "_show_launch_banner", show_banner)
     monkeypatch.setattr(main.os.path, "exists", lambda _path: True)
     monkeypatch.setattr(main, "extract_sequence_from_pdb", lambda _path: "MKT")
+    monkeypatch.setattr(main, "extract_target_chain_id", lambda _path: "A")
     monkeypatch.setattr(main, "BoltzClient", lambda **kwargs: MagicMock(api_key=kwargs["api_key"]))
     monkeypatch.setattr(main, "MoleculeGenerator", lambda **kwargs: generator_instance)
 
@@ -125,6 +127,7 @@ def test_main_happy_path_runs_generator_and_closes_clients(
     options = generator_instance.run.await_args.args[0]
     assert options.pdb_path == Path("protein.pdb")
     assert options.use_pocket_data is False
+    assert options.target_chain_id == "A"
     close_mock.assert_awaited_once()
 
 
@@ -152,6 +155,7 @@ def test_main_closes_clients_on_generator_failure(
     monkeypatch.setattr(main, "_show_launch_banner", lambda: None)
     monkeypatch.setattr(main.os.path, "exists", lambda _path: True)
     monkeypatch.setattr(main, "extract_sequence_from_pdb", lambda _path: "MKT")
+    monkeypatch.setattr(main, "extract_target_chain_id", lambda _path: "A")
     monkeypatch.setattr(main, "BoltzClient", lambda **kwargs: MagicMock(api_key=kwargs["api_key"]))
     monkeypatch.setattr(main, "MoleculeGenerator", lambda **kwargs: generator_instance)
 

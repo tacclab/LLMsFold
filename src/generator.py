@@ -1,15 +1,17 @@
 """Core molecule generation loop and orchestration."""
 
 import json
+import random
 import re
 import subprocess
-from pathlib import Path
 from functools import lru_cache
+from pathlib import Path
 from time import perf_counter
-from typing import Any
+from typing import Any, Sequence
 
+import numpy as np
 import pandas as pd
-from rdkit import Chem
+from rdkit import Chem, DataStructs
 from rdkit.Chem import FilterCatalog, rdFingerprintGenerator
 
 from src.chemistry import (
@@ -22,11 +24,14 @@ from src.clients import get_cached_groq_client
 from src.core.config import GeneratorSettings, get_generator_settings
 from src.core.constants import (
     ADJ_AFFINITY_THRESHOLD,
+    ALREADY_PROPOSED_WINDOW,
     CONTEXT_LEADS_WINDOW,
     DEFAULT_LLM_MODEL,
     DEFAULT_LLM_TEMPERATURE,
     MORGAN_FINGERPRINT_RADIUS,
+    NEGATIVE_LEADS_WINDOW,
     SAS_SCORE_MAX,
+    SAS_SCORE_MIN,
     SEED_SMILES_LIMIT,
     UNIFIED_REPORT_FILENAME,
 )
@@ -52,6 +57,11 @@ from src.schemas import (
 from src.services import PubChemService
 
 logger = get_logger(__name__)
+
+# A generated molecule is only fed back as a new prompt lead if its Tanimoto
+# similarity to every lead already in the pool is below this value. Prevents
+# the feedback loop from collapsing onto a single scaffold family.
+DEFAULT_LEAD_DIVERSITY_MAX_SIM = 0.9
 
 
 @lru_cache(maxsize=1)
@@ -87,7 +97,13 @@ class MoleculeGenerator:
         self._llm_temperature = llm_temperature
         self._adj_affinity_threshold = self._settings.adj_affinity_threshold
         self._sas_score_max = self._settings.sas_score_max
+        self._iptm_threshold = self._settings.iptm_threshold
+        self._plddt_threshold = self._settings.plddt_threshold
+        self._random_seed = self._settings.random_seed
         self._best_structure_affinity_threshold = self._settings.best_structure_affinity_threshold
+        self._lead_diversity_max_sim = getattr(
+            self._settings, "lead_diversity_max_sim", DEFAULT_LEAD_DIVERSITY_MAX_SIM
+        )
 
     @staticmethod
     def _extract_residue_contacts(pocket_residues: str | list[str] | None) -> list[PocketContact]:
@@ -113,6 +129,7 @@ class MoleculeGenerator:
         target_fps: list[Any],
         *,
         adj_affinity_threshold: float = ADJ_AFFINITY_THRESHOLD,
+        sas_score_max: float = SAS_SCORE_MAX,
     ) -> pd.DataFrame:
         """Adds similarity and reward columns used for ranking."""
 
@@ -128,6 +145,12 @@ class MoleculeGenerator:
         enriched["adj_affinity"] = enriched["Affinity_Prob"].apply(
             lambda value: value if value > adj_affinity_threshold else 0
         )
+        enriched["synth_factor"] = enriched["SAS"].apply(
+            lambda sas: max(
+                0.0,
+                min(1.0, (sas_score_max - sas) / (sas_score_max - SAS_SCORE_MIN)),
+            )
+        )
         enriched["score"] = enriched.apply(calculate_heuristic_score, axis=1)
         return enriched
 
@@ -136,6 +159,57 @@ class MoleculeGenerator:
         """Builds a human-friendly candidate id from 1-based rank."""
 
         return f"candidate-{index:04d}"
+
+    @staticmethod
+    def _select_negative_leads(
+        enriched: pd.DataFrame,
+        *,
+        adj_affinity_threshold: float,
+        sas_score_max: float,
+        known_hard_to_synthesize: Sequence[str],
+        known_weak_binders: Sequence[str],
+    ) -> tuple[list[str], list[str]]:
+        """Finds new contrastive negative examples for feedback into the prompt.
+
+        Identifies two failure modes that a single-axis score would hide:
+        strong binders that are too hard to synthesize, and easily
+        synthesizable molecules that bind too weakly.
+
+        Returns:
+            Tuple of (new hard-to-synthesize SMILES, new weak-binder SMILES),
+            excluding any SMILES already present in the known pools.
+        """
+
+        if enriched.empty:
+            return [], []
+
+        hard_to_synthesize_mask = (enriched["Affinity_Prob"] > adj_affinity_threshold) & (
+            enriched["SAS"] > sas_score_max
+        )
+        weak_binder_mask = (enriched["SAS"] <= sas_score_max) & (
+            enriched["Affinity_Prob"] <= adj_affinity_threshold
+        )
+
+        candidate_hard_to_synthesize = (
+            enriched.loc[hard_to_synthesize_mask]
+            .sort_values("Affinity_Prob", ascending=False)["SMILES"]
+            .tolist()
+        )
+        candidate_weak_binders = (
+            enriched.loc[weak_binder_mask]
+            .sort_values("SAS", ascending=True)["SMILES"]
+            .tolist()
+        )
+
+        new_hard_to_synthesize = [
+            smiles
+            for smiles in candidate_hard_to_synthesize
+            if smiles not in known_hard_to_synthesize
+        ]
+        new_weak_binders = [
+            smiles for smiles in candidate_weak_binders if smiles not in known_weak_binders
+        ]
+        return new_hard_to_synthesize, new_weak_binders
 
     @staticmethod
     def _persist_best_structures(
@@ -213,6 +287,7 @@ class MoleculeGenerator:
             results_df,
             target_fps,
             adj_affinity_threshold=adj_affinity_threshold,
+            sas_score_max=sas_score_max,
         )
         if enriched.empty:
             return enriched
@@ -229,6 +304,14 @@ class MoleculeGenerator:
         """
 
         total_steps = 5
+        if self._random_seed is not None:
+            random.seed(self._random_seed)
+            np.random.seed(self._random_seed)
+            logger.info("Run seeded with RANDOM_SEED=%s", self._random_seed)
+        else:
+            logger.info(
+                "No RANDOM_SEED configured; run is not seeded and may not be exactly reproducible"
+            )
         with make_progress_bar(
             total=total_steps,
             desc="Pipeline steps",
@@ -261,6 +344,10 @@ class MoleculeGenerator:
             )
 
             context_leads = positives.copy()
+            lead_fingerprints = list(target_fps)
+            anchor_leads = positives[:2]
+            negative_leads_hard_to_synthesize: list[str] = []
+            negative_leads_weak_binders: list[str] = []
 
             step_started_at = perf_counter()
             pocket_residues: str | None = None
@@ -289,10 +376,25 @@ class MoleculeGenerator:
                     logger.warning(pocket_detection_unavailable(exc))
                     use_pocket_data = False
                 else:
-                    residue_contacts = self._extract_residue_contacts(pocket_residues)
+                    detected_contacts = self._extract_residue_contacts(pocket_residues)
+                    residue_contacts = [
+                        contact
+                        for contact in detected_contacts
+                        if contact.chain_id == options.target_chain_id
+                    ]
+                    dropped_off_target = len(detected_contacts) - len(residue_contacts)
+                    if dropped_off_target:
+                        logger.warning(
+                            "Dropped %s pocket residue contact(s) outside target chain "
+                            "'%s' (only that chain's numbering matches the sequence "
+                            "submitted to Boltz)",
+                            dropped_off_target,
+                            options.target_chain_id,
+                        )
                     selected_pocket_metadata = {
                         "coordinates": pocket_coords,
                         "residues": pocket_residues,
+                        "target_chain_id": options.target_chain_id,
                         "residue_contacts": [
                             contact.model_dump() for contact in residue_contacts
                         ],
@@ -319,9 +421,11 @@ class MoleculeGenerator:
             )
 
             logger.info(
-                "Scoring thresholds: affinity>%.3f SAS<=%.3f",
+                "Scoring thresholds: affinity>%.3f SAS<=%.3f ipTM>=%.3f pLDDT>=%.3f",
                 self._adj_affinity_threshold,
                 self._sas_score_max,
+                self._iptm_threshold,
+                self._plddt_threshold,
             )
 
             step_started_at = perf_counter()
@@ -333,6 +437,9 @@ class MoleculeGenerator:
             )
             global_registry: list[ScoredMoleculeRecord] = []
             best_structures_by_smiles: dict[str, BestStructureRecord] = {}
+            scored_rows_by_smiles: dict[str, dict[str, Any]] = {}
+            llm_time_total = 0.0
+            boltz_time_total = 0.0
             with make_progress_bar(
                 total=options.max_iterations,
                 desc="Iterations",
@@ -341,31 +448,70 @@ class MoleculeGenerator:
                 for iteration in range(1, options.max_iterations + 1):
                     iteration_started_at = perf_counter()
                     logger.info("Iteration %s/%s started", iteration, options.max_iterations)
-                    leads_text = ", ".join(context_leads[-CONTEXT_LEADS_WINDOW:])
+                    recent_leads = context_leads[-CONTEXT_LEADS_WINDOW:]
+                    combined_leads = list(dict.fromkeys(anchor_leads + recent_leads))
+                    prompt_leads = combined_leads[:CONTEXT_LEADS_WINDOW]
+                    leads_text = ", ".join(prompt_leads)
+                    prompt_hard_to_synthesize = negative_leads_hard_to_synthesize[
+                        -NEGATIVE_LEADS_WINDOW:
+                    ]
+                    prompt_weak_binders = negative_leads_weak_binders[-NEGATIVE_LEADS_WINDOW:]
+                    avoid_hard_to_synthesize = ", ".join(prompt_hard_to_synthesize)
+                    avoid_weak_binders = ", ".join(prompt_weak_binders)
+                    prompt_already_proposed = list(scored_rows_by_smiles.keys())[
+                        -ALREADY_PROPOSED_WINDOW:
+                    ]
+                    already_proposed_text = ", ".join(prompt_already_proposed)
+                    logger.info(
+                        "Iteration %s/%s prompt context: %s lead(s), %s "
+                        "hard-to-synthesize, %s weak-binder negative example(s), "
+                        "%s already-proposed molecule(s)",
+                        iteration,
+                        options.max_iterations,
+                        len(prompt_leads),
+                        len(prompt_hard_to_synthesize),
+                        len(prompt_weak_binders),
+                        len(prompt_already_proposed),
+                    )
                     user_content = build_user_prompt(
                         use_pocket_data,
                         pocket_residues,
                         leads_text,
                         options.max_samples,
+                        avoid_hard_to_synthesize,
+                        avoid_weak_binders,
+                        already_proposed_text,
                     )
 
                     try:
-                        completion = self._groq_client.chat.completions.create(
-                            model=self._llm_model,
-                            messages=[
+                        llm_started_at = perf_counter()
+                        completion_kwargs: dict[str, Any] = {
+                            "model": self._llm_model,
+                            "messages": [
                                 {"role": "system", "content": MODEL_SYSTEM_PROMPT},
                                 {"role": "user", "content": user_content},
                             ],
-                            temperature=self._llm_temperature,
+                            "temperature": self._llm_temperature,
+                        }
+                        if self._random_seed is not None:
+                            completion_kwargs["seed"] = self._random_seed
+                        completion = self._groq_client.chat.completions.create(
+                            **completion_kwargs
                         )
+                        llm_elapsed = perf_counter() - llm_started_at
+                        llm_time_total += llm_elapsed
 
                         raw_content = completion.choices[0].message.content or ""
-                        new_smiles = parse_smiles_from_text(raw_content)
+                        new_smiles, invalid_at_parse_count = parse_smiles_from_text(raw_content)
                         logger.info(
-                            "Iteration %s/%s produced %s candidate SMILES",
+                            "Iteration %s/%s: LLM generation took %.2fs, produced %s "
+                            "candidate SMILES (%s unparseable proposal(s) discarded before "
+                            "filtering)",
                             iteration,
                             options.max_iterations,
+                            llm_elapsed,
                             len(new_smiles),
+                            invalid_at_parse_count,
                         )
 
                         valid_smiles: list[str] = []
@@ -398,11 +544,50 @@ class MoleculeGenerator:
                             len(new_smiles),
                         )
 
+                        already_scored_smiles = [
+                            smiles for smiles in valid_smiles if smiles in scored_rows_by_smiles
+                        ]
+                        new_to_score = [
+                            smiles for smiles in valid_smiles if smiles not in scored_rows_by_smiles
+                        ]
+                        if already_scored_smiles:
+                            logger.info(
+                                "Iteration %s/%s reusing %s cached Boltz score(s), "
+                                "submitting %s new candidate(s)",
+                                iteration,
+                                options.max_iterations,
+                                len(already_scored_smiles),
+                                len(new_to_score),
+                            )
+
+                        boltz_started_at = perf_counter()
                         results_df, best_structures = await self._boltz_client.compute_properties(
-                            valid_smiles,
+                            new_to_score,
                             options.protein_sequence,
                             pocket_residues=residue_contacts if use_pocket_data else None,
                         )
+                        boltz_elapsed = perf_counter() - boltz_started_at
+                        boltz_time_total += boltz_elapsed
+                        logger.info(
+                            "Iteration %s/%s: Boltz scoring took %.2fs for %s new "
+                            "candidate(s) (%s reused from cache)",
+                            iteration,
+                            options.max_iterations,
+                            boltz_elapsed,
+                            len(new_to_score),
+                            len(already_scored_smiles),
+                        )
+
+                        for row in results_df.to_dict("records"):
+                            scored_rows_by_smiles[row["SMILES"]] = row
+
+                        if already_scored_smiles:
+                            cached_rows = [
+                                scored_rows_by_smiles[smiles] for smiles in already_scored_smiles
+                            ]
+                            results_df = pd.concat(
+                                [results_df, pd.DataFrame(cached_rows)], ignore_index=True
+                            )
 
                         for item in best_structures:
                             existing = best_structures_by_smiles.get(item.smiles)
@@ -413,6 +598,7 @@ class MoleculeGenerator:
                             results_df,
                             target_fps,
                             adj_affinity_threshold=self._adj_affinity_threshold,
+                            sas_score_max=self._sas_score_max,
                         )
                         rejected_sas_count = (
                             int((enriched["SAS"] > self._sas_score_max).sum())
@@ -424,20 +610,55 @@ class MoleculeGenerator:
                             if not enriched.empty
                             else 0
                         )
+                        low_iptm_count = (
+                            int((enriched["ipTM"] < self._iptm_threshold).sum())
+                            if not enriched.empty
+                            else 0
+                        )
+                        low_plddt_count = (
+                            int((enriched["pLDDT"] < self._plddt_threshold).sum())
+                            if not enriched.empty
+                            else 0
+                        )
                         scored = (
-                            enriched[enriched["SAS"] <= self._sas_score_max]
+                            enriched[
+                                (enriched["SAS"] <= self._sas_score_max)
+                                & (enriched["ipTM"] >= self._iptm_threshold)
+                                & (enriched["pLDDT"] >= self._plddt_threshold)
+                            ]
                             if not enriched.empty
                             else enriched
                         )
 
+                        new_hard_to_synthesize, new_weak_binders = self._select_negative_leads(
+                            enriched,
+                            adj_affinity_threshold=self._adj_affinity_threshold,
+                            sas_score_max=self._sas_score_max,
+                            known_hard_to_synthesize=negative_leads_hard_to_synthesize,
+                            known_weak_binders=negative_leads_weak_binders,
+                        )
+                        negative_leads_hard_to_synthesize.extend(new_hard_to_synthesize)
+                        negative_leads_weak_binders.extend(new_weak_binders)
+                        if new_hard_to_synthesize or new_weak_binders:
+                            logger.info(
+                                "Iteration %s/%s flagged %s hard-to-synthesize and %s "
+                                "weak-binder negative example(s) for feedback",
+                                iteration,
+                                options.max_iterations,
+                                len(new_hard_to_synthesize),
+                                len(new_weak_binders),
+                            )
+
                         logger.info(
-                            "Iteration %s/%s complete in %.2fs: parsed=%s valid=%s "
-                            "boltz_scored=%s kept=%s invalid=%s catalog_filtered=%s "
-                            "lipinski_filtered=%s boltz_failed=%s rejected_sas=%s "
-                            "low_affinity=%s",
+                            "Iteration %s/%s complete in %.2fs (llm=%.2fs, boltz=%.2fs): "
+                            "parsed=%s valid=%s boltz_scored=%s kept=%s invalid=%s "
+                            "catalog_filtered=%s lipinski_filtered=%s boltz_failed=%s "
+                            "rejected_sas=%s low_affinity=%s low_iptm=%s low_plddt=%s",
                             iteration,
                             options.max_iterations,
                             perf_counter() - iteration_started_at,
+                            llm_elapsed,
+                            boltz_elapsed,
                             len(new_smiles),
                             len(valid_smiles),
                             len(results_df),
@@ -448,6 +669,8 @@ class MoleculeGenerator:
                             max(len(valid_smiles) - len(results_df), 0),
                             rejected_sas_count,
                             low_affinity_count,
+                            low_iptm_count,
+                            low_plddt_count,
                         )
 
                         if not scored.empty:
@@ -456,6 +679,59 @@ class MoleculeGenerator:
                                 for row in scored.to_dict("records")
                             ]
                             global_registry.extend(scored_records)
+
+                            # Rank leads from the cumulative registry (all iterations so
+                            # far), not just this iteration's batch, so a strong candidate
+                            # found early keeps steering later prompts even after weaker
+                            # molecules are scored in between.
+                            best_score_by_smiles: dict[str, float] = {}
+                            for record in global_registry:
+                                existing_score = best_score_by_smiles.get(record.SMILES)
+                                if existing_score is None or record.score > existing_score:
+                                    best_score_by_smiles[record.SMILES] = record.score
+                            top_leads = [
+                                smiles
+                                for smiles, _ in sorted(
+                                    best_score_by_smiles.items(),
+                                    key=lambda item: item[1],
+                                    reverse=True,
+                                )
+                            ][: CONTEXT_LEADS_WINDOW * 3]
+                            new_leads: list[str] = []
+                            for candidate_lead in top_leads:
+                                if len(new_leads) >= CONTEXT_LEADS_WINDOW:
+                                    break
+                                if candidate_lead in context_leads:
+                                    continue
+                                candidate_mol = Chem.MolFromSmiles(candidate_lead)
+                                if candidate_mol is None:
+                                    continue
+                                candidate_fp = fingerprint_generator.GetFingerprint(candidate_mol)
+                                if lead_fingerprints:
+                                    max_sim_to_pool = max(
+                                        DataStructs.TanimotoSimilarity(candidate_fp, fp)
+                                        for fp in lead_fingerprints
+                                    )
+                                    if max_sim_to_pool > self._lead_diversity_max_sim:
+                                        continue
+                                new_leads.append(candidate_lead)
+                                lead_fingerprints.append(candidate_fp)
+                            if new_leads:
+                                context_leads.extend(new_leads)
+                                logger.info(
+                                    "Iteration %s/%s fed %s new, structurally-distinct lead(s) "
+                                    "back into context",
+                                    iteration,
+                                    options.max_iterations,
+                                    len(new_leads),
+                                )
+                            else:
+                                logger.info(
+                                    "Iteration %s/%s: no sufficiently novel leads to feed back "
+                                    "(all candidates too similar to existing pool)",
+                                    iteration,
+                                    options.max_iterations,
+                                )
                     except Exception as exc:  # noqa: BLE001
                         logger.error("Error in iteration %s: %s", iteration, exc, exc_info=True)
                     finally:
@@ -465,9 +741,12 @@ class MoleculeGenerator:
             step_progress.update(1)
             step_progress.set_postfix_str("generation complete")
             logger.info(
-                "Step 3/%s complete in %.2fs: collected %s scored candidates",
+                "Step 3/%s complete in %.2fs (llm_total=%.2fs, boltz_total=%.2fs): "
+                "collected %s scored candidates",
                 total_steps,
                 perf_counter() - step_started_at,
+                llm_time_total,
+                boltz_time_total,
                 len(global_registry),
             )
 
@@ -485,7 +764,7 @@ class MoleculeGenerator:
 
             step_started_at = perf_counter()
             logger.info(
-                "Step 4/%s: verifying IP status for %s unique candidates",
+                "Step 4/%s: verifying IP status via PubChem for %s unique candidates",
                 total_steps,
                 len(final_hits),
             )
@@ -494,6 +773,7 @@ class MoleculeGenerator:
                 desc="Patent checks",
                 unit="mol",
             )
+            pubchem_time_total = perf_counter() - step_started_at
             ip_df = pd.DataFrame([item.to_report_row() for item in patent_checks])
             final_hits = pd.concat([final_hits.reset_index(drop=True), ip_df], axis=1)
             final_hits = (
@@ -520,9 +800,10 @@ class MoleculeGenerator:
             step_progress.update(1)
             step_progress.set_postfix_str("ip verified")
             logger.info(
-                "Step 4/%s complete in %.2fs: ranked %s final candidates",
+                "Step 4/%s complete in %.2fs (pubchem=%.2fs): ranked %s final candidates",
                 total_steps,
                 perf_counter() - step_started_at,
+                pubchem_time_total,
                 len(final_hits),
             )
 
@@ -547,6 +828,12 @@ class MoleculeGenerator:
                 len(final_hits),
                 report_path,
                 saved_structures,
+            )
+            logger.info(
+                "Timing breakdown: llm_generation=%.2fs boltz_scoring=%.2fs pubchem=%.2fs",
+                llm_time_total,
+                boltz_time_total,
+                pubchem_time_total,
             )
             logger.info("Workflow Complete. Results in %s", report_path)
             return str(report_path)

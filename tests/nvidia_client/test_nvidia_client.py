@@ -96,6 +96,23 @@ def test_make_nvcf_call_polls_for_202_task(monkeypatch: pytest.MonkeyPatch) -> N
     ]
 
 
+def test_build_contacts_maps_any_chain_to_boltz_polymer_id_a() -> None:
+    """Boltz always submits a single polymer with id "A"; contacts follow suit
+    regardless of the original PDB chain letter (e.g. "C")."""
+
+    client = BoltzClient(api_key="token", http_client=MagicMock())
+
+    contacts = client._build_contacts(
+        [
+            PocketContact(chain_id="C", residue_index=10),
+            PocketContact(chain_id="C", residue_index=27),
+        ]
+    )
+
+    assert [c.id for c in contacts] == ["A", "A"]
+    assert [c.residue_index for c in contacts] == [10, 27]
+
+
 def test_make_nvcf_call_returns_none_without_task_id() -> None:
     """202 without `nvcf-reqid` cannot be polled and returns `None`."""
 

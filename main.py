@@ -3,14 +3,18 @@
 import argparse
 import asyncio
 import os
+from datetime import datetime
+from pathlib import Path
 from textwrap import dedent
+from time import perf_counter
 
 from pydantic import ValidationError
 from tqdm.auto import tqdm
 
-from src.chemistry import extract_sequence_from_pdb
+from src.chemistry import extract_sequence_from_pdb, extract_target_chain_id
 from src.clients import close_cached_clients
 from src.core.config import get_settings
+from src.core.constants import LOG_DIR_NAME
 from src.core.exceptions import SequenceExtractionError
 from src.core.logging import configure_logging, get_logger
 from src.core.messages import (
@@ -25,6 +29,25 @@ from src.services import PubChemService
 
 logger = get_logger(__name__)
 BANNER_ENV_VAR = "LLMSFOLD_BANNER_SHOWN"
+
+
+def _build_run_log_path(output_dir: str) -> Path:
+    """Builds a unique per-run log file path under `<output_dir>/logs/`."""
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return Path(output_dir) / LOG_DIR_NAME / f"run_{timestamp}.log"
+
+
+def _format_duration(seconds: float) -> str:
+    """Formats elapsed seconds as `HhMMmSSs` for human-readable summaries."""
+
+    hours, remainder = divmod(int(seconds), 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m{secs:02d}s"
+    if minutes:
+        return f"{minutes}m{secs:02d}s"
+    return f"{secs}s"
 
 
 def _build_launch_banner() -> str:
@@ -110,6 +133,10 @@ async def main() -> None:
     )
     args = parser.parse_args()
 
+    run_log_path = _build_run_log_path(args.out)
+    configure_logging(settings.log_level, log_file=run_log_path)
+    logger.info("Logging run details to %s", run_log_path)
+
     if not os.path.exists(args.pdb):
         logger.error(pdb_file_not_found(args.pdb))
         return
@@ -117,9 +144,11 @@ async def main() -> None:
     logger.info("Extracting sequence from %s...", args.pdb)
     try:
         protein_sequence = extract_sequence_from_pdb(args.pdb)
+        target_chain_id = extract_target_chain_id(args.pdb)
     except SequenceExtractionError as exc:
         logger.error("%s", exc)
         return
+    logger.info("Target chain for Boltz submission: %s", target_chain_id)
 
     try:
         options = PipelineOptions(
@@ -130,6 +159,7 @@ async def main() -> None:
             max_iterations=args.iters,
             max_samples=args.samples,
             use_pocket_data=args.use_pocket,
+            target_chain_id=target_chain_id,
         )
     except ValidationError as exc:
         logger.error(invalid_runtime_options())
@@ -150,9 +180,28 @@ async def main() -> None:
         settings=settings,
     )
 
+    run_started_at = perf_counter()
+    run_started_wall = datetime.now()
+    logger.info(
+        "Run started at %s (pdb=%s, iters=%s, samples=%s, pocket=%s, out=%s, seed=%s)",
+        run_started_wall.strftime("%Y-%m-%d %H:%M:%S"),
+        args.pdb,
+        args.iters,
+        args.samples,
+        args.use_pocket,
+        args.out,
+        settings.random_seed,
+    )
     try:
         await generator.run(options)
     finally:
+        elapsed_seconds = perf_counter() - run_started_at
+        logger.info(
+            "Run finished at %s, total elapsed %.2fs (%s)",
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            elapsed_seconds,
+            _format_duration(elapsed_seconds),
+        )
         await close_cached_clients()
 
 

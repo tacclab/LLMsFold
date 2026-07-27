@@ -50,16 +50,14 @@ def _sequence_from_residue_codes(residue_codes: Sequence[str]) -> str:
     return "".join(_PDB_RESIDUE_TO_ONE_LETTER.get(code, "X") for code in residue_codes)
 
 
-def extract_sequence_from_pdb(pdb_path: str) -> str:
-    """Extracts a protein sequence from PDB `SEQRES` or `ATOM` records.
+def _resolve_target_chain(pdb_path: str) -> tuple[str, str]:
+    """Resolves the target chain id and its one-letter sequence from a PDB file.
 
-    Args:
-        pdb_path: Path to the PDB file.
-
-    Returns:
-        The primary sequence encoded in the structure. `SEQRES` is preferred;
-        when absent, the function falls back to resolved residues in `ATOM`
-        records for the first chain.
+    `SEQRES` is preferred; when absent, falls back to resolved residues in
+    `ATOM` records. In both cases the first chain in sorted order is treated
+    as the target chain -- the same chain whose sequence gets submitted to
+    Boltz, so any residue/pocket logic keyed off this chain id stays
+    consistent with what was actually sent to the API.
 
     Raises:
         SequenceExtractionError: If no sequence-bearing records can be parsed.
@@ -81,7 +79,7 @@ def extract_sequence_from_pdb(pdb_path: str) -> str:
 
     if seqres_chains:
         first_chain = sorted(seqres_chains.keys())[0]
-        return _sequence_from_residue_codes(seqres_chains[first_chain])
+        return first_chain, _sequence_from_residue_codes(seqres_chains[first_chain])
 
     atom_chains: dict[str, list[str]] = {}
     seen_residues: set[tuple[str, str, str]] = set()
@@ -113,22 +111,59 @@ def extract_sequence_from_pdb(pdb_path: str) -> str:
         raise SequenceExtractionError(pdb_sequence_missing(pdb_path))
 
     first_chain = sorted(atom_chains.keys())[0]
-    return _sequence_from_residue_codes(atom_chains[first_chain])
+    return first_chain, _sequence_from_residue_codes(atom_chains[first_chain])
+
+
+def extract_sequence_from_pdb(pdb_path: str) -> str:
+    """Extracts a protein sequence from PDB `SEQRES` or `ATOM` records.
+
+    Args:
+        pdb_path: Path to the PDB file.
+
+    Returns:
+        The primary sequence encoded in the structure. `SEQRES` is preferred;
+        when absent, the function falls back to resolved residues in `ATOM`
+        records for the first chain.
+
+    Raises:
+        SequenceExtractionError: If no sequence-bearing records can be parsed.
+    """
+
+    _, sequence = _resolve_target_chain(pdb_path)
+    return sequence
+
+
+def extract_target_chain_id(pdb_path: str) -> str:
+    """Returns the chain id whose sequence is submitted to Boltz.
+
+    This is the same chain `extract_sequence_from_pdb` reads from, so pocket
+    residue contacts can be filtered to this chain before being remapped onto
+    Boltz's single-polymer id ("A") in the request payload.
+
+    Raises:
+        SequenceExtractionError: If no sequence-bearing records can be parsed.
+    """
+
+    chain_id, _ = _resolve_target_chain(pdb_path)
+    return chain_id
 
 
 def calculate_heuristic_score(row: pd.Series) -> float:
-    """Computes heuristic ranking score with over-similarity penalty.
+    """Computes heuristic ranking score with over-similarity and synthesizability weighting.
 
     Args:
-        row: A dataframe row with `adj_affinity` and `MaxSim`.
+        row: A dataframe row with `adj_affinity`, `MaxSim`, and `synth_factor`.
 
     Returns:
-        Score value used to rank candidates.
+        Score value used to rank candidates: the novelty-adjusted affinity
+        scaled by `synth_factor` (1.0 for the easiest-to-synthesize molecules,
+        0.0 for molecules at or beyond the SAS ceiling).
     """
 
     affinity = float(row["adj_affinity"])
-    penalty = 0.5 * affinity if float(row["MaxSim"]) > 0.9 else 0.0
-    return affinity - penalty
+    similarity_penalty = 0.5 * affinity if float(row["MaxSim"]) > 0.9 else 0.0
+    affinity_component = affinity - similarity_penalty
+    return affinity_component * float(row["synth_factor"])
 
 
 def passes_lipinski(mol: Any) -> bool:
@@ -176,14 +211,16 @@ def get_max_similarity(smiles: str, target_fps: Sequence[Any]) -> float:
         return 0.0
 
 
-def parse_smiles_from_text(raw_text: str) -> list[str]:
+def parse_smiles_from_text(raw_text: str) -> tuple[list[str], int]:
     """Extracts SMILES candidates from varied LLM response formats.
 
     Args:
         raw_text: Raw model output string.
 
     Returns:
-        List of SMILES candidates parsed from quoted list entries.
+        Tuple of (SMILES candidates parsed from quoted list entries, count of
+        proposals discarded for failing SMILES validation before that list
+        was produced).
     """
 
     smiles_pattern = re.compile(r"['\"]([A-Za-z0-9@+\-\[\]\(\)\\\/%=#$\.]+)['\"]")
@@ -191,7 +228,8 @@ def parse_smiles_from_text(raw_text: str) -> list[str]:
 
     for parser in (ast.literal_eval, json.loads):
         try:
-            return ModelOutput.from_raw_payload(parser(clean_text)).smiles_list()
+            output = ModelOutput.from_raw_payload(parser(clean_text))
+            return output.smiles_list(), output.invalid_count
         except (ValueError, SyntaxError, json.JSONDecodeError, ValidationError):
             continue
 
@@ -202,17 +240,21 @@ def parse_smiles_from_text(raw_text: str) -> list[str]:
         candidate_text = match.group()
         for parser in (ast.literal_eval, json.loads):
             try:
-                return ModelOutput.from_raw_payload(parser(candidate_text)).smiles_list()
+                output = ModelOutput.from_raw_payload(parser(candidate_text))
+                return output.smiles_list(), output.invalid_count
             except (ValueError, SyntaxError, json.JSONDecodeError, ValidationError):
                 continue
 
     matches = smiles_pattern.findall(clean_text)
     if matches:
         try:
-            return ModelOutput.from_raw_payload(matches).smiles_list()
+            output = ModelOutput.from_raw_payload(matches)
+            return output.smiles_list(), output.invalid_count
         except ValidationError:
-            pass
+            logger.warning(no_smiles_parsed())
+            logger.debug("Unparsed LLM output preview: %s", clean_text[:200])
+            return [], len(matches)
 
     logger.warning(no_smiles_parsed())
     logger.debug("Unparsed LLM output preview: %s", clean_text[:200])
-    return []
+    return [], 0
