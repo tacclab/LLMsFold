@@ -61,6 +61,7 @@ class ModelOutput(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     molecules: list[GeneratedMolecule] = Field(min_length=1)
+    invalid_count: int = 0
 
     @field_validator("molecules")
     @classmethod
@@ -82,12 +83,14 @@ class ModelOutput(BaseModel):
 
         raw_items = cls._extract_raw_items(payload)
         molecules: list[GeneratedMolecule] = []
+        invalid_count = 0
         for item in raw_items:
             try:
                 molecules.append(GeneratedMolecule.from_raw(item))
             except ValidationError:
+                invalid_count += 1
                 continue
-        return cls(molecules=molecules)
+        return cls(molecules=molecules, invalid_count=invalid_count)
 
     @staticmethod
     def _extract_raw_items(payload: Any) -> list[Any]:
@@ -124,6 +127,9 @@ class PipelineOptions(BaseModel):
         max_iterations: Number of iterative generation rounds.
         max_samples: Number of LLM proposals per round.
         use_pocket_data: If `True`, includes pocket residue constraints.
+        target_chain_id: PDB chain id that `protein_sequence` was extracted
+            from. Detected pocket residues are filtered to this chain before
+            being remapped onto Boltz's single-polymer id ("A").
     """
 
     pdb_path: Path
@@ -133,6 +139,7 @@ class PipelineOptions(BaseModel):
     max_iterations: int = Field(default=3, ge=1)
     max_samples: int = Field(default=5, ge=1)
     use_pocket_data: bool = True
+    target_chain_id: str = Field(default="A", min_length=1, max_length=1)
 
     @field_validator("protein_sequence")
     @classmethod
@@ -142,6 +149,16 @@ class PipelineOptions(BaseModel):
         normalized = "".join(sequence.split()).upper()
         if not normalized:
             raise ValueError("protein_sequence must contain at least one residue")
+        return normalized
+
+    @field_validator("target_chain_id")
+    @classmethod
+    def _normalize_target_chain_id(cls, chain_id: str) -> str:
+        """Trims and uppercases the target chain identifier."""
+
+        normalized = chain_id.strip().upper()
+        if len(normalized) != 1 or not normalized.isalnum():
+            raise ValueError("target_chain_id must be a single alphanumeric character")
         return normalized
 
 
@@ -301,6 +318,7 @@ class ScoredMoleculeRecord(MoleculeRecord):
 
     MaxSim: Probability
     adj_affinity: Probability
+    synth_factor: Probability
     score: NonNegativeFloat
     Candidate_ID: str | None = None
 

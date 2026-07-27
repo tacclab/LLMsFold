@@ -29,15 +29,34 @@ DEFAULT_PUBCHEM_POLL_INTERVAL_SECONDS = 2.0
 DEFAULT_P2RANK_OUTPUT_DIRNAME = "p2rank_output"
 DEFAULT_DEEPCHEM_POCKET_PAD = 5.0
 DEFAULT_POCKET_CONTACT_DISTANCE = 8.0
+# A pocket smaller than this on any axis cannot fit a drug-like ligand plus
+# clearance, so it is excluded from selection unless no candidate qualifies.
+DEFAULT_POCKET_MIN_BOX_ANGSTROM = 8.0
+# Docking boxes are expanded up to the minimum above, but capped here so an
+# oversized/noisy pocket detection can't produce an unbounded search box.
+DEFAULT_POCKET_MAX_BOX_ANGSTROM = 30.0
+
+DEFAULT_IPTM_THRESHOLD = 0.5
+DEFAULT_PLDDT_THRESHOLD = 0.5
 
 SEED_SMILES_LIMIT = 5
 CONTEXT_LEADS_WINDOW = 5
+NEGATIVE_LEADS_WINDOW = 3
+ALREADY_PROPOSED_WINDOW = 10
 MORGAN_FINGERPRINT_RADIUS = 2
 ADJ_AFFINITY_THRESHOLD = 0.6
 SAS_SCORE_MAX = 6.0
+# Ertl's synthetic accessibility score is defined on a 1 (trivial) to 10 (very
+# hard) scale; 1 anchors the "easiest possible" end of the reward normalization.
+SAS_SCORE_MIN = 1.0
 
 UNIFIED_REPORT_FILENAME = "unified_report.csv"
 
 DEFAULT_LOG_LEVEL = "INFO"
 DEFAULT_LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
 DEFAULT_LOG_DATE_FORMAT = "%H:%M:%S"
+
+# Log files persist across runs, so they carry the full date unlike the
+# console handler which only shows time-of-day.
+DEFAULT_LOG_FILE_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+LOG_DIR_NAME = "logs"

@@ -71,12 +71,6 @@ def no_smiles_parsed() -> str:
     return "Could not parse any SMILES from LLM output"
 
 
-def unsupported_chain_id(chain_id: str) -> str:
-    """Returns a warning for unsupported Boltz chain ids."""
-
-    return f"Ignoring pocket residue with unsupported chain_id '{chain_id}'; only 'A' is declared."
-
-
 def boltz_task_timeout(task_id: str, seconds: float) -> str:
     """Returns a timeout error for long-running Boltz jobs."""
 

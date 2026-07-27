@@ -11,34 +11,42 @@ from src.core.exceptions import SequenceExtractionError
 
 
 @pytest.mark.parametrize(
-    ("adj_affinity", "max_sim", "expected"),
+    ("adj_affinity", "max_sim", "synth_factor", "expected"),
     [
-        (0.8, 0.95, 0.4),
-        (0.8, 0.9, 0.8),
-        (0.0, 0.99, 0.0),
+        (0.8, 0.95, 1.0, 0.4),
+        (0.8, 0.9, 1.0, 0.8),
+        (0.0, 0.99, 1.0, 0.0),
+        (0.8, 0.5, 0.5, 0.4),
+        (0.8, 0.95, 0.5, 0.2),
     ],
 )
-def test_calculate_heuristic_score(adj_affinity: float, max_sim: float, expected: float) -> None:
-    """Heuristic score penalizes over-similar compounds when MaxSim exceeds 0.9."""
+def test_calculate_heuristic_score(
+    adj_affinity: float, max_sim: float, synth_factor: float, expected: float
+) -> None:
+    """Heuristic score penalizes over-similar compounds and scales by synthesizability."""
 
-    row = pd.Series({"adj_affinity": adj_affinity, "MaxSim": max_sim})
+    row = pd.Series({"adj_affinity": adj_affinity, "MaxSim": max_sim, "synth_factor": synth_factor})
     assert chemistry.calculate_heuristic_score(row) == pytest.approx(expected)
 
 
 @pytest.mark.parametrize(
-    ("raw_text", "expected"),
+    ("raw_text", "expected_smiles", "expected_invalid_count"),
     [
-        ("['CCOCC', 'CCNCC']", ["CCOCC", "CCNCC"]),
-        ('Result: ["C1=CC=CC=C1"]', ["C1=CC=CC=C1"]),
-        ('{"molecules": ["CCO", "invalid", {"SMILES": "CCN"}]}', ["CCO", "CCN"]),
-        ("No list here", []),
-        ("['bad']", []),
+        ("['CCOCC', 'CCNCC']", ["CCOCC", "CCNCC"], 0),
+        ('Result: ["C1=CC=CC=C1"]', ["C1=CC=CC=C1"], 0),
+        ('{"molecules": ["CCO", "invalid", {"SMILES": "CCN"}]}', ["CCO", "CCN"], 1),
+        ("No list here", [], 0),
+        ("['bad']", [], 1),
     ],
 )
-def test_parse_smiles_from_text(raw_text: str, expected: list[str]) -> None:
-    """Only quoted list-like payloads with plausible SMILES are extracted."""
+def test_parse_smiles_from_text(
+    raw_text: str, expected_smiles: list[str], expected_invalid_count: int
+) -> None:
+    """Only quoted list-like payloads with plausible SMILES are extracted, invalid ones counted."""
 
-    assert chemistry.parse_smiles_from_text(raw_text) == expected
+    smiles, invalid_count = chemistry.parse_smiles_from_text(raw_text)
+    assert smiles == expected_smiles
+    assert invalid_count == expected_invalid_count
 
 
 @pytest.mark.parametrize(
@@ -117,6 +125,38 @@ def test_extract_sequence_from_pdb_raises_on_missing_sequence_records(tmp_path: 
 
     with pytest.raises(SequenceExtractionError, match="No SEQRES or ATOM residue records found"):
         chemistry.extract_sequence_from_pdb(str(pdb_path))
+
+
+def test_extract_target_chain_id_matches_seqres_chain(tmp_path: Path) -> None:
+    """The reported target chain is the same one the sequence was read from."""
+
+    pdb_path = tmp_path / "protein.pdb"
+    pdb_path.write_text(
+        "SEQRES   1 A    4  MET LYS THR GLY\nSEQRES   1 B    2  ALA CYS\n",
+        encoding="utf-8",
+    )
+
+    assert chemistry.extract_target_chain_id(str(pdb_path)) == "A"
+
+
+def test_extract_target_chain_id_supports_non_a_only_chain(tmp_path: Path) -> None:
+    """A structure whose only chain is not 'A' (e.g. chain C) reports that chain."""
+
+    pdb_path = tmp_path / "chain_c_only.pdb"
+    pdb_path.write_text(
+        "\n".join(
+            [
+                "ATOM      1  N   MET C   1      10.000  11.000  12.000  1.00 20.00           N",
+                "ATOM      2  CA  MET C   1      10.500  11.500  12.500  1.00 20.00           C",
+                "ATOM      3  N   LYS C   2      11.000  12.000  13.000  1.00 20.00           N",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert chemistry.extract_target_chain_id(str(pdb_path)) == "C"
+    assert chemistry.extract_sequence_from_pdb(str(pdb_path)) == "MK"
 
 
 def test_get_max_similarity_success(monkeypatch: pytest.MonkeyPatch) -> None:

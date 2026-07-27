@@ -96,6 +96,31 @@ def test_check_patents_handles_immediate_substructure_results() -> None:
     assert result.substructure_patents == 10
 
 
+def test_check_patents_url_encodes_smiles_special_characters() -> None:
+    """SMILES containing '#' (triple bonds) must not leak into the URL fragment."""
+
+    client = MagicMock()
+    client.get = AsyncMock(
+        side_effect=[
+            FakeResponse(200, {"IdentifierList": {"CID": [123]}}),
+            FakeResponse(200, {"InformationList": {"Information": []}}),
+            FakeResponse(200, {"IdentifierList": {"CID": []}}),
+        ]
+    )
+
+    service = PubChemService(http_client=client)
+    smiles = "C[C@H]1CN(C[C@H](C1)c2ccccc2)c3ccc(cc3)C#N"
+    asyncio.run(service.check_patents(smiles))
+
+    cid_lookup_url = client.get.await_args_list[0].args[0]
+    substructure_url = client.get.await_args_list[2].args[0]
+
+    assert "#" not in cid_lookup_url
+    assert cid_lookup_url.endswith("/cids/JSON")
+    assert "#" not in substructure_url
+    assert substructure_url.endswith("/JSON")
+
+
 def test_check_patents_preserves_identity_when_substructure_polling_times_out(
     monkeypatch,
     caplog,
