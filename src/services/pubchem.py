@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import Mapping
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -73,7 +74,7 @@ class PubChemService:
         """Returns the first positive PubChem CID for the input SMILES."""
 
         response = await self._get(
-            f"{_PUG_REST_BASE_URL}/smiles/{smiles}/cids/JSON",
+            f"{_PUG_REST_BASE_URL}/smiles/{quote(smiles, safe='')}/cids/JSON",
             stage="PubChem CID lookup",
         )
         if response.status_code == 200:
@@ -138,7 +139,7 @@ class PubChemService:
         """Returns a capped count of PubChem CIDs from substructure search."""
 
         response = await self._get(
-            f"{_PUG_REST_BASE_URL}/substructure/smiles/{smiles}/JSON",
+            f"{_PUG_REST_BASE_URL}/substructure/smiles/{quote(smiles, safe='')}/JSON",
             stage="PubChem substructure search",
         )
         if response.status_code == 200:

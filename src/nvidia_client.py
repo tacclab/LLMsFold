@@ -20,7 +20,6 @@ from src.core.messages import (
     boltz_structure_missing,
     boltz_task_timeout,
     invalid_boltz_response,
-    unsupported_chain_id,
 )
 from src.core.progress import make_progress_bar
 from src.sa_score import sa_score_mol
@@ -173,16 +172,19 @@ class BoltzClient:
     def _build_contacts(
         self, pocket_residues: Sequence[PocketContact] | None
     ) -> list[BoltzContact]:
-        """Converts validated residue contacts into Boltz payload contacts."""
+        """Converts validated residue contacts into Boltz payload contacts.
 
-        contacts: list[BoltzContact] = []
-        for normalized in pocket_residues or []:
-            if normalized.chain_id != "A":
-                logger.warning(unsupported_chain_id(normalized.chain_id))
-                continue
+        Boltz always assigns id "A" to the single polymer submitted in the
+        request regardless of that chain's original PDB label, so every
+        contact maps to "A" here. Callers are responsible for filtering
+        `pocket_residues` down to the chain that `sequence` was extracted
+        from before reaching this point (see `MoleculeGenerator.run`).
+        """
 
-            contacts.append(BoltzContact(id="A", residue_index=normalized.residue_index))
-        return contacts
+        return [
+            BoltzContact(id="A", residue_index=normalized.residue_index)
+            for normalized in pocket_residues or []
+        ]
 
     async def _poll_task(self, task_id: str, headers: dict[str, str]) -> dict[str, object] | None:
         """Polls long-running NVCF task until completion, failure, or timeout."""
@@ -372,6 +374,10 @@ class BoltzClient:
                     prediction.complex_plddt_scores[0] if prediction.complex_plddt_scores else 0.0
                 )
 
+                # `affinity_probability_binary` (binder/non-binder classifier output) and
+                # `affinity_pic50` (regression output) are two independent Boltz-2 model
+                # heads, not one derived from the other. `IC50_uM` below *is* derived,
+                # but only from pIC50: IC50[M] = 10^-pIC50, converted here to micromolar.
                 ligand_affinity = (
                     next(iter(prediction.affinities.values()))
                     if prediction.affinities

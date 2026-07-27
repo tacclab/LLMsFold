@@ -16,6 +16,8 @@ from src.core.constants import (
     DEFAULT_DEEPCHEM_POCKET_PAD,
     DEFAULT_P2RANK_OUTPUT_DIRNAME,
     DEFAULT_POCKET_CONTACT_DISTANCE,
+    DEFAULT_POCKET_MAX_BOX_ANGSTROM,
+    DEFAULT_POCKET_MIN_BOX_ANGSTROM,
 )
 from src.core.exceptions import PocketDetectionError
 from src.core.logging import get_logger
@@ -88,20 +90,39 @@ def get_p2rank_pocket(pdb_path: str | Path, output_dir: str | Path = ".") -> str
     return str(pocket_df.iloc[0]["residue_ids"])
 
 
-def _pocket_volume(pocket: Any) -> float:
-    """Estimates pocket volume from axis-aligned ranges."""
+def _pocket_dimensions(pocket: Any) -> tuple[float, float, float]:
+    """Returns a pocket's axis-aligned (x, y, z) extents in Angstroms."""
 
     return (
-        (pocket.x_range[1] - pocket.x_range[0])
-        * (pocket.y_range[1] - pocket.y_range[0])
-        * (pocket.z_range[1] - pocket.z_range[0])
+        pocket.x_range[1] - pocket.x_range[0],
+        pocket.y_range[1] - pocket.y_range[0],
+        pocket.z_range[1] - pocket.z_range[0],
     )
 
 
+def _pocket_volume(pocket: Any) -> float:
+    """Estimates pocket volume from axis-aligned ranges."""
+
+    size_x, size_y, size_z = _pocket_dimensions(pocket)
+    return size_x * size_y * size_z
+
+
+def _meets_minimum_dimensions(pocket: Any, min_dimension: float) -> bool:
+    """Checks that every axis of a pocket is at least `min_dimension` wide."""
+
+    return all(size >= min_dimension for size in _pocket_dimensions(pocket))
+
+
 def _select_pocket(
-    pockets: list[Any], pocket_data: list[dict[str, float]], pocket_index: int
+    pockets: list[Any],
+    pocket_data: list[dict[str, float]],
+    pocket_index: int,
+    min_dimension: float = DEFAULT_POCKET_MIN_BOX_ANGSTROM,
 ) -> Any:
-    """Selects a pocket index, defaulting to largest volume when index is invalid."""
+    """Selects a pocket, preferring the largest volume among pockets that meet
+    the minimum per-axis dimension; falls back to the largest pocket overall
+    when none qualify.
+    """
 
     logger.info("Detected %s candidate pockets", len(pocket_data))
     for row in pocket_data:
@@ -118,8 +139,31 @@ def _select_pocket(
         logger.info("Selected configured pocket index %s.", pocket_index)
         return pockets[pocket_index]
 
-    logger.info("Pocket index %s out of range, defaulting to largest volume.", pocket_index)
+    qualifying = [
+        pocket for pocket in pockets if _meets_minimum_dimensions(pocket, min_dimension)
+    ]
+    if qualifying:
+        logger.info(
+            "%s/%s pocket(s) meet the %.1fA minimum per-axis dimension; "
+            "selecting the largest by volume.",
+            len(qualifying),
+            len(pockets),
+            min_dimension,
+        )
+        return max(qualifying, key=_pocket_volume)
+
+    logger.warning(
+        "No detected pocket meets the %.1fA minimum per-axis dimension; "
+        "falling back to the largest pocket overall.",
+        min_dimension,
+    )
     return max(pockets, key=_pocket_volume)
+
+
+def _expand_box_dimension(size: float, min_dimension: float, max_dimension: float) -> float:
+    """Expands a docking box dimension up to the minimum, capped at the maximum."""
+
+    return min(max(size, min_dimension), max_dimension)
 
 
 def _pick_pocket_id_from_cli(pocket_data: list[dict[str, float]]) -> int | None:
@@ -206,13 +250,40 @@ def get_binding_pockets_and_residues(
         best_pocket = _select_pocket(pockets, pocket_data, pocket_index=pocket_index)
     center = np.asarray(best_pocket.center(), dtype=float)
 
+    raw_size_x, raw_size_y, raw_size_z = _pocket_dimensions(best_pocket)
+    size_x = _expand_box_dimension(
+        raw_size_x, DEFAULT_POCKET_MIN_BOX_ANGSTROM, DEFAULT_POCKET_MAX_BOX_ANGSTROM
+    )
+    size_y = _expand_box_dimension(
+        raw_size_y, DEFAULT_POCKET_MIN_BOX_ANGSTROM, DEFAULT_POCKET_MAX_BOX_ANGSTROM
+    )
+    size_z = _expand_box_dimension(
+        raw_size_z, DEFAULT_POCKET_MIN_BOX_ANGSTROM, DEFAULT_POCKET_MAX_BOX_ANGSTROM
+    )
+    if (size_x, size_y, size_z) != (raw_size_x, raw_size_y, raw_size_z):
+        logger.info(
+            "Adjusted docking box from (%.2f, %.2f, %.2f)A to (%.2f, %.2f, %.2f)A "
+            "(min=%.1fA, max=%.1fA per axis)",
+            raw_size_x,
+            raw_size_y,
+            raw_size_z,
+            size_x,
+            size_y,
+            size_z,
+            DEFAULT_POCKET_MIN_BOX_ANGSTROM,
+            DEFAULT_POCKET_MAX_BOX_ANGSTROM,
+        )
+
     pose_info: dict[str, float] = {
         "center_x": float(center[0]),
         "center_y": float(center[1]),
         "center_z": float(center[2]),
-        "size_x": float(best_pocket.x_range[1] - best_pocket.x_range[0]),
-        "size_y": float(best_pocket.y_range[1] - best_pocket.y_range[0]),
-        "size_z": float(best_pocket.z_range[1] - best_pocket.z_range[0]),
+        "size_x": size_x,
+        "size_y": size_y,
+        "size_z": size_z,
+        "raw_size_x": raw_size_x,
+        "raw_size_y": raw_size_y,
+        "raw_size_z": raw_size_z,
     }
 
     mol = Chem.MolFromPDBFile(os.fspath(pdb_path))
