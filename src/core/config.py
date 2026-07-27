@@ -21,6 +21,7 @@ from src.core.constants import (
     DEFAULT_BOLTZ_STEP_SCALE,
     DEFAULT_BOLTZ_WITHOUT_POTENTIALS,
     DEFAULT_FEW_SHOT_CSV,
+    DEFAULT_IPTM_THRESHOLD,
     DEFAULT_LLM_MODEL,
     DEFAULT_LLM_TEMPERATURE,
     DEFAULT_LOG_LEVEL,
@@ -28,6 +29,7 @@ from src.core.constants import (
     DEFAULT_MAX_SAMPLES,
     DEFAULT_OUTPUT_DIR,
     DEFAULT_PDB_FILE,
+    DEFAULT_PLDDT_THRESHOLD,
     DEFAULT_PUBCHEM_LISTKEY_ATTEMPTS,
     DEFAULT_PUBCHEM_POLL_INTERVAL_SECONDS,
     DEFAULT_PUBCHEM_TIMEOUT_SECONDS,
@@ -59,6 +61,19 @@ class GeneratorSettings(BaseSettings):
         le=1.0,
     )
     sas_score_max: float = Field(default=SAS_SCORE_MAX, alias="SAS_SCORE_MAX", ge=1.0, le=10.0)
+    iptm_threshold: float = Field(
+        default=DEFAULT_IPTM_THRESHOLD,
+        alias="IPTM_THRESHOLD",
+        ge=0.0,
+        le=1.0,
+    )
+    plddt_threshold: float = Field(
+        default=DEFAULT_PLDDT_THRESHOLD,
+        alias="PLDDT_THRESHOLD",
+        ge=0.0,
+        le=1.0,
+    )
+    random_seed: int | None = Field(default=None, alias="RANDOM_SEED")
     best_structure_affinity_threshold: float | None = Field(
         default=None,
         alias="BEST_STRUCTURE_AFFINITY_THRESHOLD",

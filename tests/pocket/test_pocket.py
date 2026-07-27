@@ -221,6 +221,55 @@ def test_select_pocket(
     assert selected is pockets[expected_index]
 
 
+def test_select_pocket_prefers_largest_qualifying_over_largest_overall() -> None:
+    """A pocket failing the minimum dimension is skipped even if its volume is bigger."""
+
+    # Flat/wide pocket: huge volume but fails the per-axis minimum on z.
+    oversized_but_shallow = DummyPocket(center=(0.0, 0.0, 0.0), spans=(50.0, 50.0, 1.0))
+    # Smaller volume overall, but every axis clears the minimum.
+    qualifying = DummyPocket(center=(1.0, 1.0, 1.0), spans=(9.0, 9.0, 9.0))
+    pockets = [oversized_but_shallow, qualifying]
+    pocket_rows = [
+        {"pocket_id": 1.0, "center_x": 0.0, "center_y": 0.0, "center_z": 0.0, "volume_approx": 2500.0},
+        {"pocket_id": 2.0, "center_x": 1.0, "center_y": 1.0, "center_z": 1.0, "volume_approx": 729.0},
+    ]
+
+    selected = pocket._select_pocket(pockets, pocket_rows, pocket_index=-1)
+
+    assert selected is qualifying
+
+
+def test_select_pocket_falls_back_when_none_qualify() -> None:
+    """When no pocket meets the minimum dimension, the largest overall is used."""
+
+    small_a = DummyPocket(center=(0.0, 0.0, 0.0), spans=(1.0, 1.0, 1.0))
+    small_b = DummyPocket(center=(1.0, 1.0, 1.0), spans=(4.0, 4.0, 4.0))
+    pockets = [small_a, small_b]
+    pocket_rows = [
+        {"pocket_id": 1.0, "center_x": 0.0, "center_y": 0.0, "center_z": 0.0, "volume_approx": 1.0},
+        {"pocket_id": 2.0, "center_x": 1.0, "center_y": 1.0, "center_z": 1.0, "volume_approx": 64.0},
+    ]
+
+    selected = pocket._select_pocket(pockets, pocket_rows, pocket_index=-1)
+
+    assert selected is small_b
+
+
+@pytest.mark.parametrize(
+    ("size", "expected"),
+    [
+        (2.0, 8.0),   # below minimum -> expanded up to the minimum
+        (8.0, 8.0),   # at minimum -> unchanged
+        (15.0, 15.0),  # within range -> unchanged
+        (50.0, 30.0),  # above maximum -> capped
+    ],
+)
+def test_expand_box_dimension(size: float, expected: float) -> None:
+    """Box dimensions are expanded up to the minimum and capped at the maximum."""
+
+    assert pocket._expand_box_dimension(size, 8.0, 30.0) == pytest.approx(expected)
+
+
 def test_get_binding_pockets_and_residues_uses_p2rank_by_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -304,9 +353,12 @@ def test_get_binding_pockets_and_residues_with_mocked_mol(
         "center_x": 1.0,
         "center_y": 2.0,
         "center_z": 3.0,
-        "size_x": 2.0,
-        "size_y": 2.0,
-        "size_z": 2.0,
+        "size_x": 8.0,
+        "size_y": 8.0,
+        "size_z": 8.0,
+        "raw_size_x": 2.0,
+        "raw_size_y": 2.0,
+        "raw_size_z": 2.0,
     }
 
 
@@ -337,9 +389,12 @@ def test_get_binding_pockets_and_residues_handles_unreadable_pdb(
         "center_x": 5.0,
         "center_y": 6.0,
         "center_z": 7.0,
-        "size_x": 1.0,
-        "size_y": 1.0,
-        "size_z": 1.0,
+        "size_x": 8.0,
+        "size_y": 8.0,
+        "size_z": 8.0,
+        "raw_size_x": 1.0,
+        "raw_size_y": 1.0,
+        "raw_size_z": 1.0,
     }
 
 
