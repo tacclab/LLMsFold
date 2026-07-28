@@ -130,6 +130,10 @@ class PipelineOptions(BaseModel):
         target_chain_id: PDB chain id that `protein_sequence` was extracted
             from. Detected pocket residues are filtered to this chain before
             being remapped onto Boltz's single-polymer id ("A").
+        residue_position_map: Maps PDB residue numbers (e.g. 203-498) onto
+            1-based positions within `protein_sequence` (e.g. 1-294). Pocket
+            residues without an entry here fall in a gap/disordered region
+            and must not be sent to Boltz.
     """
 
     pdb_path: Path
@@ -140,6 +144,7 @@ class PipelineOptions(BaseModel):
     max_samples: int = Field(default=5, ge=1)
     use_pocket_data: bool = True
     target_chain_id: str = Field(default="A", min_length=1, max_length=1)
+    residue_position_map: dict[int, int] = Field(default_factory=dict)
 
     @field_validator("protein_sequence")
     @classmethod

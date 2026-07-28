@@ -11,7 +11,11 @@ from time import perf_counter
 from pydantic import ValidationError
 from tqdm.auto import tqdm
 
-from src.chemistry import extract_sequence_from_pdb, extract_target_chain_id
+from src.chemistry import (
+    extract_residue_position_map,
+    extract_sequence_from_pdb,
+    extract_target_chain_id,
+)
 from src.clients import close_cached_clients
 from src.core.config import get_settings
 from src.core.constants import LOG_DIR_NAME
@@ -145,10 +149,15 @@ async def main() -> None:
     try:
         protein_sequence = extract_sequence_from_pdb(args.pdb)
         target_chain_id = extract_target_chain_id(args.pdb)
+        residue_position_map = extract_residue_position_map(args.pdb)
     except SequenceExtractionError as exc:
         logger.error("%s", exc)
         return
-    logger.info("Target chain for Boltz submission: %s", target_chain_id)
+    logger.info(
+        "Target chain for Boltz submission: %s (%s residue(s) mapped)",
+        target_chain_id,
+        len(residue_position_map),
+    )
 
     try:
         options = PipelineOptions(
@@ -160,6 +169,7 @@ async def main() -> None:
             max_samples=args.samples,
             use_pocket_data=args.use_pocket,
             target_chain_id=target_chain_id,
+            residue_position_map=residue_position_map,
         )
     except ValidationError as exc:
         logger.error(invalid_runtime_options())
