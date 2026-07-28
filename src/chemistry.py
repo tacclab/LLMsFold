@@ -50,14 +50,68 @@ def _sequence_from_residue_codes(residue_codes: Sequence[str]) -> str:
     return "".join(_PDB_RESIDUE_TO_ONE_LETTER.get(code, "X") for code in residue_codes)
 
 
-def _resolve_target_chain(pdb_path: str) -> tuple[str, str]:
-    """Resolves the target chain id and its one-letter sequence from a PDB file.
+def _build_seqres_position_map(
+    lines: list[str], chain_id: str, sequence: str
+) -> dict[int, int]:
+    """Maps PDB residue numbers onto 1-based positions in a SEQRES sequence.
+
+    `SEQRES` records list residue names only -- no residue numbers -- so the
+    mapping has to be recovered from `ATOM` records for the same chain. This
+    is only safe when every resolved `ATOM` residue accounts for exactly one
+    `SEQRES` entry in the same order (i.e. no unresolved/missing residues).
+    When that doesn't hold, an empty map is returned rather than guessing,
+    so callers skip pocket-residue constraints for this chain instead of
+    silently sending a wrong residue index.
+    """
+
+    atom_resnums: list[int] = []
+    seen: set[str] = set()
+    for line in lines:
+        if line[:6] != "ATOM  ":
+            continue
+        line_chain = line[21].strip() or "A"
+        if line_chain != chain_id:
+            continue
+        residue_number = line[22:26].strip()
+        insertion_code = line[26].strip()
+        dedup_key = f"{residue_number}{insertion_code}"
+        if dedup_key in seen:
+            continue
+        seen.add(dedup_key)
+        try:
+            atom_resnums.append(int(residue_number))
+        except ValueError:
+            continue
+
+    if len(atom_resnums) != len(sequence):
+        logger.warning(
+            "Cannot safely map pocket residue numbers onto the SEQRES sequence for "
+            "chain '%s' (%s resolved ATOM residue(s) vs %s SEQRES residue(s)); pocket "
+            "residue constraints will be unavailable for this chain.",
+            chain_id,
+            len(atom_resnums),
+            len(sequence),
+        )
+        return {}
+
+    return {resnum: index + 1 for index, resnum in enumerate(atom_resnums)}
+
+
+def _resolve_target_chain(pdb_path: str) -> tuple[str, str, dict[int, int]]:
+    """Resolves the target chain id, its sequence, and its residue position map.
 
     `SEQRES` is preferred; when absent, falls back to resolved residues in
     `ATOM` records. In both cases the first chain in sorted order is treated
     as the target chain -- the same chain whose sequence gets submitted to
     Boltz, so any residue/pocket logic keyed off this chain id stays
     consistent with what was actually sent to the API.
+
+    The returned position map translates PDB residue numbers (as printed in
+    the PDB file, e.g. 203-498) into 1-based positions within `sequence`
+    (e.g. 1-294) -- the numbering Boltz actually expects for pocket
+    constraints. Residues absent from the returned sequence (disordered/
+    missing loops) are simply not keys in the map, so gaps in PDB numbering
+    never produce an out-of-range or misaligned index.
 
     Raises:
         SequenceExtractionError: If no sequence-bearing records can be parsed.
@@ -79,9 +133,12 @@ def _resolve_target_chain(pdb_path: str) -> tuple[str, str]:
 
     if seqres_chains:
         first_chain = sorted(seqres_chains.keys())[0]
-        return first_chain, _sequence_from_residue_codes(seqres_chains[first_chain])
+        sequence = _sequence_from_residue_codes(seqres_chains[first_chain])
+        position_map = _build_seqres_position_map(lines, first_chain, sequence)
+        return first_chain, sequence, position_map
 
     atom_chains: dict[str, list[str]] = {}
+    atom_chain_resnums: dict[str, list[int]] = {}
     seen_residues: set[tuple[str, str, str]] = set()
     saw_model = False
     for line in lines:
@@ -106,12 +163,17 @@ def _resolve_target_chain(pdb_path: str) -> tuple[str, str]:
         seen_residues.add(residue_key)
         residue_name = line[17:20].strip()
         atom_chains.setdefault(chain_id, []).append(residue_name)
+        atom_chain_resnums.setdefault(chain_id, []).append(int(residue_number))
 
     if not atom_chains:
         raise SequenceExtractionError(pdb_sequence_missing(pdb_path))
 
     first_chain = sorted(atom_chains.keys())[0]
-    return first_chain, _sequence_from_residue_codes(atom_chains[first_chain])
+    sequence = _sequence_from_residue_codes(atom_chains[first_chain])
+    position_map = {
+        resnum: index + 1 for index, resnum in enumerate(atom_chain_resnums[first_chain])
+    }
+    return first_chain, sequence, position_map
 
 
 def extract_sequence_from_pdb(pdb_path: str) -> str:
@@ -129,7 +191,7 @@ def extract_sequence_from_pdb(pdb_path: str) -> str:
         SequenceExtractionError: If no sequence-bearing records can be parsed.
     """
 
-    _, sequence = _resolve_target_chain(pdb_path)
+    _, sequence, _ = _resolve_target_chain(pdb_path)
     return sequence
 
 
@@ -144,8 +206,25 @@ def extract_target_chain_id(pdb_path: str) -> str:
         SequenceExtractionError: If no sequence-bearing records can be parsed.
     """
 
-    chain_id, _ = _resolve_target_chain(pdb_path)
+    chain_id, _, _ = _resolve_target_chain(pdb_path)
     return chain_id
+
+
+def extract_residue_position_map(pdb_path: str) -> dict[int, int]:
+    """Returns the PDB-residue-number -> 1-based sequence-position map.
+
+    This is the mapping needed to translate detected pocket residues (which
+    carry PDB numbering, e.g. 203-498) into the positions Boltz expects
+    within the submitted sequence (e.g. 1-294). PDB residue numbers with no
+    entry in the map fall outside the submitted sequence (missing/disordered
+    residues) and must not be sent to Boltz.
+
+    Raises:
+        SequenceExtractionError: If no sequence-bearing records can be parsed.
+    """
+
+    _, _, position_map = _resolve_target_chain(pdb_path)
+    return position_map
 
 
 def calculate_heuristic_score(row: pd.Series) -> float:

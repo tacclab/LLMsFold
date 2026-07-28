@@ -1,8 +1,11 @@
 # Custom Python.gitignore
 .idea
 results
+results_*/
 .env
 .pyc
+.DS_Store
+.ruff_cache/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

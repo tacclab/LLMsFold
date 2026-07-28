@@ -377,12 +377,12 @@ class MoleculeGenerator:
                     use_pocket_data = False
                 else:
                     detected_contacts = self._extract_residue_contacts(pocket_residues)
-                    residue_contacts = [
+                    on_target_chain = [
                         contact
                         for contact in detected_contacts
                         if contact.chain_id == options.target_chain_id
                     ]
-                    dropped_off_target = len(detected_contacts) - len(residue_contacts)
+                    dropped_off_target = len(detected_contacts) - len(on_target_chain)
                     if dropped_off_target:
                         logger.warning(
                             "Dropped %s pocket residue contact(s) outside target chain "
@@ -391,6 +391,32 @@ class MoleculeGenerator:
                             dropped_off_target,
                             options.target_chain_id,
                         )
+
+                    # Detected contacts carry PDB residue numbers (e.g. 203-498);
+                    # Boltz expects 1-based positions within the submitted
+                    # sequence (e.g. 1-294). Translate through the position map
+                    # built from the same residues used to construct that
+                    # sequence, and drop anything with no mapped position
+                    # (missing/disordered residues) rather than ever sending a
+                    # raw PDB number as if it were a sequence position.
+                    residue_contacts = []
+                    dropped_unmapped = 0
+                    for contact in on_target_chain:
+                        sequence_index = options.residue_position_map.get(contact.residue_index)
+                        if sequence_index is None:
+                            dropped_unmapped += 1
+                            continue
+                        residue_contacts.append(
+                            PocketContact(chain_id=contact.chain_id, residue_index=sequence_index)
+                        )
+                    if dropped_unmapped:
+                        logger.warning(
+                            "Dropped %s pocket residue contact(s) with no position in the "
+                            "submitted sequence (PDB residue number falls in a gap/"
+                            "disordered region, or no residue_position_map was provided)",
+                            dropped_unmapped,
+                        )
+
                     selected_pocket_metadata = {
                         "coordinates": pocket_coords,
                         "residues": pocket_residues,
