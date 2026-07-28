@@ -1,7 +1,4 @@
 # LLMsFold: AI Molecular Generation Framework
-<p align="center">
-  <img src="images/LLMsFold.png" alt="LLMsFold logo" width="280">
-</p>
 
 LLMsFold is an automated molecule generation pipeline for early drug discovery. It combines LLM-driven proposal generation with NVIDIA Boltz scoring, chemistry filters, and PubChem novelty checks.
 
