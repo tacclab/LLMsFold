@@ -231,7 +231,16 @@ def test_run_full_workflow_generates_report(
     generator_dependencies,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Generator run executes mocked full loop and writes unified report."""
+    """Generator run executes mocked full loop and writes unified report.
+
+    Uses PDB residue numbers (210, 498) that differ from their mapped sequence
+    positions (10, 12) to prove pocket contacts are translated through
+    `residue_position_map` rather than sent as raw PDB numbers (the A1 bug).
+    """
+
+    mapped_options = pipeline_options.model_copy(
+        update={"residue_position_map": {210: 10, 498: 12}}
+    )
 
     fake_molecule = object()
     monkeypatch.setattr(
@@ -249,7 +258,7 @@ def test_run_full_workflow_generates_report(
     monkeypatch.setattr(
         generator,
         "get_binding_pockets_and_residues",
-        lambda *_args, **_kwargs: ("Center", "ALA10_A, LYS12_A", None),
+        lambda *_args, **_kwargs: ("Center", "ALA210_A, LYS498_A", None),
     )
     monkeypatch.setattr(generator, "parse_smiles_from_text", lambda _raw: (["CCO"], 0))
     monkeypatch.setattr(generator, "passes_lipinski", lambda _mol: True)
@@ -272,7 +281,7 @@ def test_run_full_workflow_generates_report(
         pubchem_service=pubchem_service,
     )
 
-    report_path = asyncio.run(workflow.run(pipeline_options))
+    report_path = asyncio.run(workflow.run(mapped_options))
 
     assert report_path is not None
     report = Path(report_path)
@@ -302,7 +311,9 @@ def test_run_drops_pocket_contacts_outside_target_chain(
     "A" instead of the chain the submitted sequence actually came from.
     """
 
-    chain_c_options = pipeline_options.model_copy(update={"target_chain_id": "C"})
+    chain_c_options = pipeline_options.model_copy(
+        update={"target_chain_id": "C", "residue_position_map": {10: 5}}
+    )
 
     fake_molecule = object()
     monkeypatch.setattr(
@@ -347,9 +358,10 @@ def test_run_drops_pocket_contacts_outside_target_chain(
 
     boltz_client.compute_properties.assert_awaited_once()
     kwargs = boltz_client.compute_properties.await_args.kwargs
-    # Only the residue detected on the target chain "C" (ALA10) survives;
-    # LYS12 on chain "A" is dropped since it isn't part of the submitted sequence.
-    assert [c.residue_index for c in kwargs["pocket_residues"]] == [10]
+    # Only the residue detected on the target chain "C" (PDB number 10, mapped to
+    # sequence position 5) survives; LYS12 on chain "A" is dropped since it isn't
+    # part of the submitted sequence.
+    assert [c.residue_index for c in kwargs["pocket_residues"]] == [5]
 
 
 def test_run_reuses_cached_boltz_score_across_iterations(

@@ -139,6 +139,89 @@ def test_extract_target_chain_id_matches_seqres_chain(tmp_path: Path) -> None:
     assert chemistry.extract_target_chain_id(str(pdb_path)) == "A"
 
 
+def test_extract_residue_position_map_handles_atom_gaps(tmp_path: Path) -> None:
+    """PDB residue numbers with a gap map onto consecutive sequence positions.
+
+    Regression test for a bug where the raw PDB residue number (which can run
+    far higher than the sequence length, e.g. 203-498 for a 294-residue
+    construct) was sent to Boltz as if it were already a 1-based sequence
+    position. Residues 10 and 11 are followed by a gap (12-14 missing, e.g. a
+    disordered loop) before residue 15 resumes -- position 3 must map to PDB
+    residue 15, not to some number in the 200s-400s range from an unrelated
+    construct.
+    """
+
+    pdb_path = tmp_path / "gapped.pdb"
+    pdb_path.write_text(
+        "\n".join(
+            [
+                "ATOM      1  N   MET A  10      10.000  11.000  12.000  1.00 20.00           N",
+                "ATOM      2  N   LYS A  11      11.000  12.000  13.000  1.00 20.00           N",
+                "ATOM      3  N   GLY A  15      12.000  13.000  14.000  1.00 20.00           N",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    position_map = chemistry.extract_residue_position_map(str(pdb_path))
+    sequence = chemistry.extract_sequence_from_pdb(str(pdb_path))
+
+    assert sequence == "MKG"
+    assert position_map == {10: 1, 11: 2, 15: 3}
+    # The bug this guards against: no mapped index may fall outside the
+    # sequence's own bounds, regardless of how the PDB numbers the residues.
+    assert all(1 <= index <= len(sequence) for index in position_map.values())
+
+
+def test_extract_residue_position_map_seqres_path_matching_counts(tmp_path: Path) -> None:
+    """SEQRES-derived sequences map correctly when ATOM residues fully resolve them."""
+
+    pdb_path = tmp_path / "seqres_complete.pdb"
+    pdb_path.write_text(
+        "\n".join(
+            [
+                "SEQRES   1 A    3  MET LYS GLY",
+                "ATOM      1  N   MET A  50      10.000  11.000  12.000  1.00 20.00           N",
+                "ATOM      2  N   LYS A  51      11.000  12.000  13.000  1.00 20.00           N",
+                "ATOM      3  N   GLY A  52      12.000  13.000  14.000  1.00 20.00           N",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    position_map = chemistry.extract_residue_position_map(str(pdb_path))
+
+    assert position_map == {50: 1, 51: 2, 52: 3}
+
+
+def test_extract_residue_position_map_seqres_path_unresolved_residues(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """SEQRES longer than resolved ATOM residues yields an empty, safe map."""
+
+    pdb_path = tmp_path / "seqres_gap.pdb"
+    pdb_path.write_text(
+        "\n".join(
+            [
+                "SEQRES   1 A    3  MET LYS GLY",
+                "ATOM      1  N   MET A  50      10.000  11.000  12.000  1.00 20.00           N",
+                "ATOM      2  N   GLY A  52      12.000  13.000  14.000  1.00 20.00           N",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with caplog.at_level("WARNING"):
+        position_map = chemistry.extract_residue_position_map(str(pdb_path))
+
+    assert position_map == {}
+    assert any("Cannot safely map" in record.message for record in caplog.records)
+
+
 def test_extract_target_chain_id_supports_non_a_only_chain(tmp_path: Path) -> None:
     """A structure whose only chain is not 'A' (e.g. chain C) reports that chain."""
 
