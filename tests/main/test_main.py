@@ -114,6 +114,7 @@ def test_main_happy_path_runs_generator_and_closes_clients(
     monkeypatch.setattr(main.os.path, "exists", lambda _path: True)
     monkeypatch.setattr(main, "extract_sequence_from_pdb", lambda _path: "MKT")
     monkeypatch.setattr(main, "extract_target_chain_id", lambda _path: "A")
+    monkeypatch.setattr(main, "extract_residue_position_map", lambda _path: {})
     monkeypatch.setattr(main, "BoltzClient", lambda **kwargs: MagicMock(api_key=kwargs["api_key"]))
     monkeypatch.setattr(main, "MoleculeGenerator", lambda **kwargs: generator_instance)
 
@@ -156,6 +157,7 @@ def test_main_closes_clients_on_generator_failure(
     monkeypatch.setattr(main.os.path, "exists", lambda _path: True)
     monkeypatch.setattr(main, "extract_sequence_from_pdb", lambda _path: "MKT")
     monkeypatch.setattr(main, "extract_target_chain_id", lambda _path: "A")
+    monkeypatch.setattr(main, "extract_residue_position_map", lambda _path: {})
     monkeypatch.setattr(main, "BoltzClient", lambda **kwargs: MagicMock(api_key=kwargs["api_key"]))
     monkeypatch.setattr(main, "MoleculeGenerator", lambda **kwargs: generator_instance)
 
