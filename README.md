@@ -6,6 +6,7 @@ LLMsFold is an automated molecule generation pipeline for early drug discovery. 
 
 - Wageesha Widuranga `†`  
   [![1 UniPD MAPS](https://img.shields.io/badge/1-UniPD%20MAPS-1F4E79?style=flat-square)](https://www.maps.unipd.it/en/department)
+  [![TaccLab](https://img.shields.io/badge/TaccLab-Research%20Group-1F4E79?style=flat-square)](https://tacclab.org/)
 
 - Davide Rigoni `†`  
   [![9 UniPD Math](https://img.shields.io/badge/9-UniPD%20Math-1F4E79?style=flat-square)](https://www.math.unipd.it/en/)
