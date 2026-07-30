@@ -7,8 +7,11 @@ LLMsFold is an automated molecule generation pipeline for early drug discovery. 
 
 ## Authors
 
-- W. W. Waththe Liyanage `†`  
+- Wageesha Widuranga `†`  
   [![1 UniPD MAPS](https://img.shields.io/badge/1-UniPD%20MAPS-1F4E79?style=flat-square)](https://www.maps.unipd.it/en/department)
+
+- Davide Rigoni `†`  
+  [![9 UniPD Math](https://img.shields.io/badge/9-UniPD%20Math-1F4E79?style=flat-square)](https://www.math.unipd.it/en/)
 
 - Fabio Bove `†`  
   [![1 UniPD MAPS](https://img.shields.io/badge/1-UniPD%20MAPS-1F4E79?style=flat-square)](https://www.maps.unipd.it/en/department)
@@ -31,6 +34,12 @@ LLMsFold is an automated molecule generation pipeline for early drug discovery. 
 - Marilena V. Iorio  
   [![4 INT Milan](https://img.shields.io/badge/4-INT%20Milan-1F4E79?style=flat-square)](https://www.istitutotumori.mi.it/en)
 
+- Marco Grassia  
+  [![7 UniCT DIEEI](https://img.shields.io/badge/7-UniCT%20DIEEI-1F4E79?style=flat-square)](https://www.dieei.unict.it/en/)
+
+- Giuseppe Mangioni  
+  [![7 UniCT DIEEI](https://img.shields.io/badge/7-UniCT%20DIEEI-1F4E79?style=flat-square)](https://www.dieei.unict.it/en/)
+
 - Pietro Lio `§`  
   [![2 Cambridge CST](https://img.shields.io/badge/2-Cambridge%20CST-1F4E79?style=flat-square)](https://www.cst.cam.ac.uk/)
 
@@ -49,6 +58,7 @@ LLMsFold is an automated molecule generation pipeline for early drug discovery. 
 - [![6 UniPD Biology](https://img.shields.io/badge/6-UniPD%20Biology-1F4E79?style=flat-square)](https://www.unipd.it/en/en/university/scientific-and-academic-structures/departments/department-biology) Department of Biology, University of Padova, Padova, Italy
 - [![7 UniCT DIEEI](https://img.shields.io/badge/7-UniCT%20DIEEI-1F4E79?style=flat-square)](https://www.dieei.unict.it/en/) Department of Electrical, Electronic and Computer Engineering, University of Catania, Catania, Italy
 - [![8 UCBM Rome](https://img.shields.io/badge/8-UCBM%20Rome-1F4E79?style=flat-square)](https://www.unicampus.it/en/) University Campus Bio-Medico of Rome, Rome, Italy
+- [![9 UniPD Math](https://img.shields.io/badge/9-UniPD%20Math-1F4E79?style=flat-square)](https://www.math.unipd.it/en/) Dipartimento di Matematica "Tullio Levi-Civita", University of Padova, Padova, Italy
 
 ## Author Notes
 
