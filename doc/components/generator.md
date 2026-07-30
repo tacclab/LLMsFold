@@ -58,8 +58,19 @@ flowchart TD
 - `score = adj_affinity` with over-similarity penalty:
   - If `MaxSim > 0.9`, score is reduced by `0.5 * adj_affinity`.
   - Result is scaled by `synth_factor`, which is `1.0` at `SAS_SCORE_MIN` and `0.0` at `SAS_SCORE_MAX`.
-- Final molecules must pass `SAS <= SAS_SCORE_MAX` (default `6.0`), `ipTM >= IPTM_THRESHOLD`
+- Final molecules must pass `SAS <= SAS_SCORE_MAX` (default `10.0`), `ipTM >= IPTM_THRESHOLD`
   (default `0.5`), and `pLDDT >= PLDDT_THRESHOLD` (default `0.5`).
+
+## Similarity-Penalty Registry
+- `MaxSim` (used in the over-similarity penalty above) is computed against `registry_fps`,
+  which starts as the initial seed fingerprints and grows every iteration with the
+  fingerprints of every molecule that clears the scoring gates (`global_registry`).
+  A candidate too similar to *anything registered so far* -- not just the original
+  seeds -- gets penalized.
+- This is distinct from `lead_fingerprints`, the narrower pool used only to decide
+  whether a high-scoring candidate becomes a new *prompt lead* (see Feedback Loop
+  Details above) -- that pool only contains molecules that already passed the
+  lead-diversity filter, not every scored molecule.
 
 ## Pocket-Aware Mode
 - If enabled, obtains pocket residues via `get_binding_pockets_and_residues`.

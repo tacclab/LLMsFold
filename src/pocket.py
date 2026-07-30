@@ -15,6 +15,7 @@ from rdkit import Chem
 from src.core.constants import (
     DEFAULT_DEEPCHEM_POCKET_PAD,
     DEFAULT_P2RANK_OUTPUT_DIRNAME,
+    DEFAULT_POCKET_BOX_MARGIN_ANGSTROM,
     DEFAULT_POCKET_CONTACT_DISTANCE,
     DEFAULT_POCKET_MAX_BOX_ANGSTROM,
     DEFAULT_POCKET_MIN_BOX_ANGSTROM,
@@ -119,9 +120,11 @@ def _select_pocket(
     pocket_index: int,
     min_dimension: float = DEFAULT_POCKET_MIN_BOX_ANGSTROM,
 ) -> Any:
-    """Selects a pocket, preferring the largest volume among pockets that meet
-    the minimum per-axis dimension; falls back to the largest pocket overall
-    when none qualify.
+    """Selects a pocket, preferring the smallest volume among pockets that meet
+    the minimum per-axis dimension -- this minimizes the docking search space
+    while still guaranteeing a ligand-sized cavity. Falls back to the largest
+    pocket overall when none qualify, since a degenerate near-zero-volume
+    artifact would be a worse default than an oversized one.
     """
 
     logger.info("Detected %s candidate pockets", len(pocket_data))
@@ -145,12 +148,12 @@ def _select_pocket(
     if qualifying:
         logger.info(
             "%s/%s pocket(s) meet the %.1fA minimum per-axis dimension; "
-            "selecting the largest by volume.",
+            "selecting the smallest by volume.",
             len(qualifying),
             len(pockets),
             min_dimension,
         )
-        return max(qualifying, key=_pocket_volume)
+        return min(qualifying, key=_pocket_volume)
 
     logger.warning(
         "No detected pocket meets the %.1fA minimum per-axis dimension; "
@@ -160,10 +163,10 @@ def _select_pocket(
     return max(pockets, key=_pocket_volume)
 
 
-def _expand_box_dimension(size: float, min_dimension: float, max_dimension: float) -> float:
-    """Expands a docking box dimension up to the minimum, capped at the maximum."""
+def _expand_box_dimension(size: float, margin: float, max_dimension: float) -> float:
+    """Isotropically expands a docking box dimension by `margin`, capped at the maximum."""
 
-    return min(max(size, min_dimension), max_dimension)
+    return min(size + margin, max_dimension)
 
 
 def _pick_pocket_id_from_cli(pocket_data: list[dict[str, float]]) -> int | None:
@@ -198,13 +201,19 @@ def get_binding_pockets_and_residues(
     pdb_path: str | Path,
     output_dir: str | Path = "results",
     backend: str = "p2rank",
-    pocket_index: int = 0,
+    pocket_index: int = -1,
 ) -> tuple[str, str, dict[str, float] | None]:
-    """Finds pockets and residues within 8A around chosen pocket center.
+    """Finds pockets and residues near the chosen pocket, using two
+    complementary criteria: (i) a heavy atom within the expanded docking
+    box, or (ii) any atom within `DEFAULT_POCKET_CONTACT_DISTANCE` of the
+    pocket center.
 
     Args:
         pdb_path: Path to target protein PDB file.
         output_dir: Directory where detected pocket summary is saved.
+        pocket_index: Explicit 0-based pocket index to force. Any value
+            outside `[0, len(pockets))` -- including the default `-1` --
+            triggers automatic selection instead.
 
     Returns:
         Tuple containing pocket center string, nearby residue list string, and
@@ -252,25 +261,25 @@ def get_binding_pockets_and_residues(
 
     raw_size_x, raw_size_y, raw_size_z = _pocket_dimensions(best_pocket)
     size_x = _expand_box_dimension(
-        raw_size_x, DEFAULT_POCKET_MIN_BOX_ANGSTROM, DEFAULT_POCKET_MAX_BOX_ANGSTROM
+        raw_size_x, DEFAULT_POCKET_BOX_MARGIN_ANGSTROM, DEFAULT_POCKET_MAX_BOX_ANGSTROM
     )
     size_y = _expand_box_dimension(
-        raw_size_y, DEFAULT_POCKET_MIN_BOX_ANGSTROM, DEFAULT_POCKET_MAX_BOX_ANGSTROM
+        raw_size_y, DEFAULT_POCKET_BOX_MARGIN_ANGSTROM, DEFAULT_POCKET_MAX_BOX_ANGSTROM
     )
     size_z = _expand_box_dimension(
-        raw_size_z, DEFAULT_POCKET_MIN_BOX_ANGSTROM, DEFAULT_POCKET_MAX_BOX_ANGSTROM
+        raw_size_z, DEFAULT_POCKET_BOX_MARGIN_ANGSTROM, DEFAULT_POCKET_MAX_BOX_ANGSTROM
     )
     if (size_x, size_y, size_z) != (raw_size_x, raw_size_y, raw_size_z):
         logger.info(
             "Adjusted docking box from (%.2f, %.2f, %.2f)A to (%.2f, %.2f, %.2f)A "
-            "(min=%.1fA, max=%.1fA per axis)",
+            "(margin=+%.1fA, max=%.1fA per axis)",
             raw_size_x,
             raw_size_y,
             raw_size_z,
             size_x,
             size_y,
             size_z,
-            DEFAULT_POCKET_MIN_BOX_ANGSTROM,
+            DEFAULT_POCKET_BOX_MARGIN_ANGSTROM,
             DEFAULT_POCKET_MAX_BOX_ANGSTROM,
         )
 
@@ -293,11 +302,20 @@ def get_binding_pockets_and_residues(
 
     conformer = mol.GetConformer()
     nearby_residues: set[str] = set()
+    half_extents = np.array([size_x, size_y, size_z], dtype=float) / 2.0
 
     for atom in mol.GetAtoms():
         position = conformer.GetAtomPosition(atom.GetIdx())
-        distance = np.linalg.norm(np.array([position.x, position.y, position.z]) - center)
-        if distance > DEFAULT_POCKET_CONTACT_DISTANCE:
+        coords = np.array([position.x, position.y, position.z])
+        offset = coords - center
+
+        within_radius = np.linalg.norm(offset) <= DEFAULT_POCKET_CONTACT_DISTANCE
+        # Heavy-atom-in-expanded-box criterion, complementary to the radius
+        # criterion above: a residue qualifies if either one holds.
+        within_expanded_box = atom.GetAtomicNum() != 1 and bool(
+            np.all(np.abs(offset) <= half_extents)
+        )
+        if not (within_radius or within_expanded_box):
             continue
 
         info = atom.GetPDBResidueInfo()

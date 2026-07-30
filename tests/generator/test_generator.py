@@ -131,7 +131,7 @@ def test_post_process_scores_enriches_and_filters(monkeypatch: pytest.MonkeyPatc
         generator, "calculate_heuristic_score", lambda row: row["adj_affinity"] + 0.1
     )
 
-    scored = MoleculeGenerator._post_process_scores(source, target_fps=["fp"])
+    scored = MoleculeGenerator._post_process_scores(source, target_fps=["fp"], sas_score_max=6.0)
 
     assert list(scored["SMILES"]) == ["CCO"]
     assert scored.iloc[0]["adj_affinity"] == pytest.approx(0.7)
@@ -417,6 +417,98 @@ def test_run_reuses_cached_boltz_score_across_iterations(
     second_call_smiles = boltz_client.compute_properties.await_args_list[1].args[0]
     assert first_call_smiles == ["CCO"]
     assert second_call_smiles == []
+
+
+def test_run_similarity_penalty_pool_grows_with_registry(
+    pipeline_options,
+    generator_dependencies,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The MaxSim/similarity-penalty comparison pool grows each iteration.
+
+    Regression test for the paper's Eq. 3 ("global registry G"): the pool
+    passed to `get_max_similarity` must include molecules registered in
+    earlier iterations, not stay fixed at the initial seed set.
+    """
+
+    two_iteration_options = pipeline_options.model_copy(
+        update={"max_iterations": 2, "use_pocket_data": False}
+    )
+
+    fake_molecule = object()
+    monkeypatch.setattr(
+        generator.Chem,
+        "MolFromSmiles",
+        lambda smiles, **_kwargs: fake_molecule if smiles in {"MOL1", "MOL2"} else None,
+    )
+
+    fake_fp_generator = MagicMock()
+    fake_fp_generator.GetFingerprint.side_effect = lambda mol: f"fp-{id(mol)}"
+    monkeypatch.setattr(
+        generator.rdFingerprintGenerator, "GetMorganGenerator", lambda radius: fake_fp_generator
+    )
+
+    proposals = iter([(["MOL1"], 0), (["MOL2"], 0)])
+    monkeypatch.setattr(generator, "parse_smiles_from_text", lambda _raw: next(proposals))
+    monkeypatch.setattr(generator, "passes_lipinski", lambda _mol: True)
+    monkeypatch.setattr(
+        generator, "calculate_heuristic_score", lambda row: float(row["adj_affinity"])
+    )
+
+    registry_sizes_seen: list[int] = []
+
+    def fake_get_max_similarity(_smiles: str, fps: list) -> float:
+        registry_sizes_seen.append(len(fps))
+        return 0.5
+
+    monkeypatch.setattr(generator, "get_max_similarity", fake_get_max_similarity)
+
+    async def fake_compute_properties(smiles_list, _sequence, **_kwargs):
+        smiles = smiles_list[0]
+        df = pd.DataFrame(
+            [
+                {
+                    "SMILES": smiles,
+                    "pTM": 0.9,
+                    "ipTM": 0.8,
+                    "Confidence": 0.7,
+                    "pLDDT": 0.6,
+                    "Affinity_Prob": 0.95,
+                    "pIC50": 7.0,
+                    "IC50_uM": 0.1,
+                    "MolWt": 46.07,
+                    "LogP": 0.2,
+                    "QED": 0.5,
+                    "SAS": 3.1,
+                    "TPSA": 20.2,
+                    "H_Acceptors": 1,
+                    "H_Donors": 1,
+                    "Rotatable_Bonds": 0,
+                }
+            ]
+        )
+        return df, []
+
+    boltz_client = MagicMock()
+    boltz_client.compute_properties = fake_compute_properties
+
+    pubchem_service = MagicMock()
+    pubchem_service.check_patents = AsyncMock(
+        return_value=PatentCheckResult(pubchem_cid=None, identity_patents=0, substructure_patents=1)
+    )
+
+    workflow = MoleculeGenerator(
+        groq_api_key="g-key",
+        boltz_client=boltz_client,
+        pubchem_service=pubchem_service,
+    )
+
+    asyncio.run(workflow.run(two_iteration_options))
+
+    assert len(registry_sizes_seen) == 2
+    # Iteration 2's pool must be larger than iteration 1's: MOL1, registered
+    # after iteration 1, is now part of the comparison pool.
+    assert registry_sizes_seen[1] == registry_sizes_seen[0] + 1
 
 
 def test_run_returns_none_when_no_molecules(

@@ -345,6 +345,12 @@ class MoleculeGenerator:
 
             context_leads = positives.copy()
             lead_fingerprints = list(target_fps)
+            # Similarity-penalty pool: starts as the seed molecules and grows with
+            # every molecule that clears the scoring gates in any iteration, so
+            # later candidates are penalized for resembling anything registered so
+            # far -- not just the fixed seed set.
+            registry_fps: list[Any] = list(target_fps)
+            registry_smiles_seen: set[str] = set(positives)
             anchor_leads = positives[:2]
             negative_leads_hard_to_synthesize: list[str] = []
             negative_leads_weak_binders: list[str] = []
@@ -622,7 +628,7 @@ class MoleculeGenerator:
 
                         enriched = self._enrich_scores(
                             results_df,
-                            target_fps,
+                            registry_fps,
                             adj_affinity_threshold=self._adj_affinity_threshold,
                             sas_score_max=self._sas_score_max,
                         )
@@ -705,6 +711,29 @@ class MoleculeGenerator:
                                 for row in scored.to_dict("records")
                             ]
                             global_registry.extend(scored_records)
+
+                            # Grow the similarity-penalty pool with this iteration's newly
+                            # registered molecules so the *next* iteration's penalty check
+                            # sees everything scored so far, not just the original seeds.
+                            new_registry_entries = 0
+                            for record in scored_records:
+                                if record.SMILES in registry_smiles_seen:
+                                    continue
+                                registry_smiles_seen.add(record.SMILES)
+                                registry_mol = Chem.MolFromSmiles(record.SMILES)
+                                if registry_mol is None:
+                                    continue
+                                registry_fps.append(fingerprint_generator.GetFingerprint(registry_mol))
+                                new_registry_entries += 1
+                            if new_registry_entries:
+                                logger.info(
+                                    "Iteration %s/%s added %s new molecule(s) to the "
+                                    "similarity-penalty registry (%s total)",
+                                    iteration,
+                                    options.max_iterations,
+                                    new_registry_entries,
+                                    len(registry_fps),
+                                )
 
                             # Rank leads from the cumulative registry (all iterations so
                             # far), not just this iteration's batch, so a strong candidate

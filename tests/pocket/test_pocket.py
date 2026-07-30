@@ -58,15 +58,24 @@ class FakeResidueInfo:
 class FakeAtom:
     """Mimics RDKit atom object used by residue extraction."""
 
-    def __init__(self, idx: int, residue_info: FakeResidueInfo | None) -> None:
+    def __init__(
+        self,
+        idx: int,
+        residue_info: FakeResidueInfo | None,
+        atomic_num: int = 6,
+    ) -> None:
         self._idx = idx
         self._residue_info = residue_info
+        self._atomic_num = atomic_num
 
     def GetIdx(self) -> int:  # noqa: N802
         return self._idx
 
     def GetPDBResidueInfo(self) -> FakeResidueInfo | None:  # noqa: N802
         return self._residue_info
+
+    def GetAtomicNum(self) -> int:  # noqa: N802
+        return self._atomic_num
 
 
 class FakeConformer:
@@ -221,7 +230,7 @@ def test_select_pocket(
     assert selected is pockets[expected_index]
 
 
-def test_select_pocket_prefers_largest_qualifying_over_largest_overall() -> None:
+def test_select_pocket_excludes_disqualified_pocket_regardless_of_volume() -> None:
     """A pocket failing the minimum dimension is skipped even if its volume is bigger."""
 
     # Flat/wide pocket: huge volume but fails the per-axis minimum on z.
@@ -237,6 +246,26 @@ def test_select_pocket_prefers_largest_qualifying_over_largest_overall() -> None
     selected = pocket._select_pocket(pockets, pocket_rows, pocket_index=-1)
 
     assert selected is qualifying
+
+
+def test_select_pocket_prefers_smallest_among_multiple_qualifying() -> None:
+    """Among several qualifying pockets, the smallest by volume is chosen.
+
+    This minimizes the docking search space while still guaranteeing a
+    ligand-sized cavity, per the paper's stated selection rule.
+    """
+
+    smaller_qualifying = DummyPocket(center=(0.0, 0.0, 0.0), spans=(9.0, 9.0, 9.0))
+    larger_qualifying = DummyPocket(center=(1.0, 1.0, 1.0), spans=(10.0, 10.0, 10.0))
+    pockets = [larger_qualifying, smaller_qualifying]
+    pocket_rows = [
+        {"pocket_id": 1.0, "center_x": 1.0, "center_y": 1.0, "center_z": 1.0, "volume_approx": 1000.0},
+        {"pocket_id": 2.0, "center_x": 0.0, "center_y": 0.0, "center_z": 0.0, "volume_approx": 729.0},
+    ]
+
+    selected = pocket._select_pocket(pockets, pocket_rows, pocket_index=-1)
+
+    assert selected is smaller_qualifying
 
 
 def test_select_pocket_falls_back_when_none_qualify() -> None:
@@ -258,16 +287,16 @@ def test_select_pocket_falls_back_when_none_qualify() -> None:
 @pytest.mark.parametrize(
     ("size", "expected"),
     [
-        (2.0, 8.0),   # below minimum -> expanded up to the minimum
-        (8.0, 8.0),   # at minimum -> unchanged
-        (15.0, 15.0),  # within range -> unchanged
-        (50.0, 30.0),  # above maximum -> capped
+        (2.0, 7.0),    # +5 margin, no cap
+        (15.0, 20.0),  # +5 margin, no cap
+        (25.0, 30.0),  # +5 margin would exceed max -> capped
+        (50.0, 30.0),  # already over max before margin -> capped
     ],
 )
 def test_expand_box_dimension(size: float, expected: float) -> None:
-    """Box dimensions are expanded up to the minimum and capped at the maximum."""
+    """Box dimensions are expanded by an isotropic margin, capped at the maximum."""
 
-    assert pocket._expand_box_dimension(size, 8.0, 30.0) == pytest.approx(expected)
+    assert pocket._expand_box_dimension(size, 5.0, 30.0) == pytest.approx(expected)
 
 
 def test_get_binding_pockets_and_residues_uses_p2rank_by_default(
@@ -353,13 +382,64 @@ def test_get_binding_pockets_and_residues_with_mocked_mol(
         "center_x": 1.0,
         "center_y": 2.0,
         "center_z": 3.0,
-        "size_x": 8.0,
-        "size_y": 8.0,
-        "size_z": 8.0,
+        "size_x": 7.0,
+        "size_y": 7.0,
+        "size_z": 7.0,
         "raw_size_x": 2.0,
         "raw_size_y": 2.0,
         "raw_size_z": 2.0,
     }
+
+
+def test_get_binding_pockets_and_residues_box_membership_criterion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A heavy atom outside the contact radius but inside the expanded box
+    still qualifies its residue; a hydrogen atom in the same spot does not.
+
+    Regression test for the paper's two complementary residue-selection
+    criteria: (i) heavy atom within the expanded box, (ii) any atom within
+    the contact radius of the pocket center. Previously only (ii) was
+    implemented.
+    """
+
+    # Large pocket (20A per axis) so the expanded box half-extent (10A)
+    # exceeds the 8A contact radius, letting a box-only atom exist.
+    selected = DummyPocket(center=(0.0, 0.0, 0.0), spans=(20.0, 20.0, 20.0))
+    finder_instance = MagicMock()
+    finder_instance.find_pockets.return_value = [selected]
+    finder_cls = MagicMock(return_value=finder_instance)
+    fake_deepchem = types.SimpleNamespace(
+        dock=types.SimpleNamespace(ConvexHullPocketFinder=finder_cls),
+    )
+    monkeypatch.setitem(__import__("sys").modules, "deepchem", fake_deepchem)
+    monkeypatch.setattr(pocket, "_select_pocket", lambda pockets, rows, pocket_index: selected)
+
+    atoms = [
+        # Outside the 8A radius (distance=9) but inside the 20A box (half-extent 10A).
+        FakeAtom(0, FakeResidueInfo("ALA", 10, "A"), atomic_num=6),
+        # Same position, but a hydrogen -> must not satisfy the box criterion.
+        FakeAtom(1, FakeResidueInfo("GLY", 20, "A"), atomic_num=1),
+        # Far outside both the radius and the box.
+        FakeAtom(2, FakeResidueInfo("SER", 30, "A"), atomic_num=6),
+    ]
+    conformer = FakeConformer(
+        {
+            0: FakePosition(9.0, 0.0, 0.0),
+            1: FakePosition(9.0, 0.0, 0.0),
+            2: FakePosition(40.0, 40.0, 40.0),
+        }
+    )
+    fake_mol = FakeMol(atoms=atoms, conformer=conformer)
+    monkeypatch.setattr(pocket.Chem, "MolFromPDBFile", lambda _path: fake_mol)
+
+    _center, residues, box_dims = pocket.get_binding_pockets_and_residues(
+        "protein.pdb", str(tmp_path), backend="deepchem"
+    )
+
+    assert residues == "ALA10_A"
+    assert box_dims["size_x"] == pytest.approx(25.0)
 
 
 def test_get_binding_pockets_and_residues_handles_unreadable_pdb(
@@ -389,9 +469,9 @@ def test_get_binding_pockets_and_residues_handles_unreadable_pdb(
         "center_x": 5.0,
         "center_y": 6.0,
         "center_z": 7.0,
-        "size_x": 8.0,
-        "size_y": 8.0,
-        "size_z": 8.0,
+        "size_x": 6.0,
+        "size_y": 6.0,
+        "size_z": 6.0,
         "raw_size_x": 1.0,
         "raw_size_y": 1.0,
         "raw_size_z": 1.0,
@@ -469,3 +549,34 @@ def test_get_binding_pockets_and_residues_uses_cli_selected_pocket(
     assert center == "Center: 9.00, 9.00, 9.00"
     assert residues == "Unknown"
     assert box_dims is not None
+
+
+def test_get_binding_pockets_and_residues_default_pocket_index_is_automatic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression test: not passing `pocket_index` must trigger automatic
+    (dimension-filtered, smallest-by-volume) selection, not silently force
+    pocket 0. Previously the default was `0`, which `_select_pocket` treats
+    as an explicit "always pick index 0" request, since index 0 is always
+    in-range whenever at least one pocket exists.
+    """
+
+    larger_qualifying = DummyPocket(center=(0.0, 0.0, 0.0), spans=(10.0, 10.0, 10.0))
+    smaller_qualifying = DummyPocket(center=(1.0, 1.0, 1.0), spans=(9.0, 9.0, 9.0))
+    finder_instance = MagicMock()
+    finder_instance.find_pockets.return_value = [larger_qualifying, smaller_qualifying]
+    finder_cls = MagicMock(return_value=finder_instance)
+    fake_deepchem = types.SimpleNamespace(
+        dock=types.SimpleNamespace(ConvexHullPocketFinder=finder_cls),
+    )
+    monkeypatch.setitem(__import__("sys").modules, "deepchem", fake_deepchem)
+    monkeypatch.setattr(pocket.sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(pocket.Chem, "MolFromPDBFile", lambda _path: None)
+
+    # Note: no `pocket_index` argument -- exercising the real default.
+    center, _residues, _box_dims = pocket.get_binding_pockets_and_residues(
+        "protein.pdb",
+        backend="deepchem",
+    )
+
+    assert center == "Center: 1.00, 1.00, 1.00"

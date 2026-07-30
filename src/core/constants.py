@@ -29,10 +29,14 @@ DEFAULT_PUBCHEM_POLL_INTERVAL_SECONDS = 2.0
 DEFAULT_P2RANK_OUTPUT_DIRNAME = "p2rank_output"
 DEFAULT_DEEPCHEM_POCKET_PAD = 5.0
 DEFAULT_POCKET_CONTACT_DISTANCE = 8.0
-# A pocket smaller than this on any axis cannot fit a drug-like ligand plus
-# clearance, so it is excluded from selection unless no candidate qualifies.
+# A pocket smaller than this on any axis (raw hull dimensions, before the
+# margin below is applied) cannot fit a drug-like ligand plus clearance, so
+# it is excluded from selection unless no candidate qualifies.
 DEFAULT_POCKET_MIN_BOX_ANGSTROM = 8.0
-# Docking boxes are expanded up to the minimum above, but capped here so an
+# Isotropic margin added to the *selected* pocket's box only, to account for
+# side-chain flexibility during docking.
+DEFAULT_POCKET_BOX_MARGIN_ANGSTROM = 5.0
+# Docking boxes are expanded by the margin above, but capped here so an
 # oversized/noisy pocket detection can't produce an unbounded search box.
 DEFAULT_POCKET_MAX_BOX_ANGSTROM = 30.0
 
@@ -45,7 +49,7 @@ NEGATIVE_LEADS_WINDOW = 3
 ALREADY_PROPOSED_WINDOW = 10
 MORGAN_FINGERPRINT_RADIUS = 2
 ADJ_AFFINITY_THRESHOLD = 0.6
-SAS_SCORE_MAX = 6.0
+SAS_SCORE_MAX = 10.0
 # Ertl's synthetic accessibility score is defined on a 1 (trivial) to 10 (very
 # hard) scale; 1 anchors the "easiest possible" end of the reward normalization.
 SAS_SCORE_MIN = 1.0
