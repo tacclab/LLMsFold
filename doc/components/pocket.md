@@ -15,7 +15,7 @@ flowchart TD
     C -->|No| D[Return No pockets found, Unknown]
     C -->|Yes| E[Compute centers, per-axis sizes, approximate volumes]
     E --> F[Write all_pockets.csv]
-    F --> G[Interactive or automatic pocket selection]
+    F --> G[Deterministic automatic pocket selection]
     G --> H[Expand/cap docking box dimensions]
     H --> I[Load PDB with RDKit]
     I --> J[Collect residues: heavy atom in expanded box, OR atom within 8A of center]
@@ -33,8 +33,8 @@ flowchart TD
 - If no pocket meets the minimum dimension, the largest pocket overall is used as a
   fallback (with a warning) -- a degenerate near-zero-volume artifact would be a worse
   default than an oversized one.
-- When run from an interactive TTY, the user is prompted with the largest-volume
-  suggestion and can override it with any other detected pocket id.
+- Selection is always deterministic and non-interactive; there is no TTY prompt or
+  manual-override path, so a given PDB always yields the same selected pocket.
 
 ## Docking Box Sizing
 - Each axis of the *selected* pocket's box is isotropically expanded by

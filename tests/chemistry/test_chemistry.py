@@ -33,7 +33,7 @@ def test_calculate_heuristic_score(
     ("raw_text", "expected_smiles", "expected_invalid_count"),
     [
         ("['CCOCC', 'CCNCC']", ["CCOCC", "CCNCC"], 0),
-        ('Result: ["C1=CC=CC=C1"]', ["C1=CC=CC=C1"], 0),
+        ('Result: ["C1=CC=CC=C1"]', ["c1ccccc1"], 0),  # canonicalized to aromatic form
         ('{"molecules": ["CCO", "invalid", {"SMILES": "CCN"}]}', ["CCO", "CCN"], 1),
         ("No list here", [], 0),
         ("['bad']", [], 1),

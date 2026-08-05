@@ -45,8 +45,8 @@ flowchart TD
   micromolar. It is not derived from `Affinity_Prob`.
 - Filtering thresholds applied downstream in `MoleculeGenerator.run` (`src/generator.py`):
   `Affinity_Prob > ADJ_AFFINITY_THRESHOLD` (default `0.6`), `ipTM >= IPTM_THRESHOLD`
-  (default `0.5`), `pLDDT >= PLDDT_THRESHOLD` (default `0.5`), `SAS <= SAS_SCORE_MAX`
-  (default `10.0`).
+  (default `0.95`), `pLDDT >= PLDDT_THRESHOLD` (default `0.9`), `SAS <= SAS_SCORE_MAX`
+  (default `6.0`).
 
 ## Chain Handling
 - Boltz always submits the target as a single polymer with id `"A"`, regardless of the

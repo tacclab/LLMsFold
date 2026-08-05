@@ -30,6 +30,7 @@ def test_check_patents_full_success_flow(monkeypatch) -> None:
         side_effect=[
             FakeResponse(200, {"IdentifierList": {"CID": [123]}}),
             FakeResponse(200, {"InformationList": {"Information": [{"PatentID": ["P1", "P2"]}]}}),
+            FakeResponse(404, {}),  # no drug/medication info
             FakeResponse(202, {"Waiting": {"ListKey": "abc"}}),
             FakeResponse(200, {"IdentifierList": {"CID": list(range(20))}}),
         ]
@@ -43,6 +44,7 @@ def test_check_patents_full_success_flow(monkeypatch) -> None:
     assert result.pubchem_cid == 123
     assert result.identity_patents == 2
     assert result.substructure_patents == 10
+    assert result.has_drug_info is False
 
 
 def test_check_patents_handles_http_error() -> None:
@@ -104,6 +106,7 @@ def test_check_patents_url_encodes_smiles_special_characters() -> None:
         side_effect=[
             FakeResponse(200, {"IdentifierList": {"CID": [123]}}),
             FakeResponse(200, {"InformationList": {"Information": []}}),
+            FakeResponse(404, {}),  # no drug/medication info
             FakeResponse(200, {"IdentifierList": {"CID": []}}),
         ]
     )
@@ -113,12 +116,31 @@ def test_check_patents_url_encodes_smiles_special_characters() -> None:
     asyncio.run(service.check_patents(smiles))
 
     cid_lookup_url = client.get.await_args_list[0].args[0]
-    substructure_url = client.get.await_args_list[2].args[0]
+    substructure_url = client.get.await_args_list[3].args[0]
 
     assert "#" not in cid_lookup_url
     assert cid_lookup_url.endswith("/cids/JSON")
     assert "#" not in substructure_url
     assert substructure_url.endswith("/JSON")
+
+
+def test_check_patents_detects_drug_medication_info() -> None:
+    """A PUG View 200 for the drug-info heading sets `has_drug_info`."""
+
+    client = MagicMock()
+    client.get = AsyncMock(
+        side_effect=[
+            FakeResponse(200, {"IdentifierList": {"CID": [2244]}}),
+            FakeResponse(200, {"InformationList": {"Information": []}}),
+            FakeResponse(200, {"Record": {"RecordTitle": "Aspirin"}}),  # has drug info
+            FakeResponse(200, {"IdentifierList": {"CID": []}}),
+        ]
+    )
+
+    service = PubChemService(http_client=client)
+    result = asyncio.run(service.check_patents("CC(=O)OC1=CC=CC=C1C(=O)O"))
+
+    assert result.has_drug_info is True
 
 
 def test_check_patents_preserves_identity_when_substructure_polling_times_out(
@@ -132,6 +154,7 @@ def test_check_patents_preserves_identity_when_substructure_polling_times_out(
         side_effect=[
             FakeResponse(200, {"IdentifierList": {"CID": [123]}}),
             FakeResponse(200, {"InformationList": {"Information": [{"PatentID": ["P1", "P2"]}]}}),
+            FakeResponse(404, {}),  # no drug/medication info
             FakeResponse(202, {"Waiting": {"ListKey": "abc"}}),
             FakeResponse(400, {}, text="still processing"),
             FakeResponse(400, {}, text="still processing"),

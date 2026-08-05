@@ -16,14 +16,22 @@ from rdkit import Chem
 
 
 def _validate_smiles(value: str) -> str:
-    """Normalizes and validates a SMILES string with RDKit."""
+    """Validates a SMILES string with RDKit and returns its canonical form.
+
+    Canonicalizing here -- the single point every SMILES in the pipeline
+    passes through via `SmilesString` -- ensures the same molecule written
+    two different ways is cached, deduplicated, and counted as one entry
+    everywhere downstream (Boltz score cache, global registry, lead pools,
+    final report), instead of being treated as two distinct molecules.
+    """
 
     normalized = value.strip()
     if not normalized:
         raise ValueError("SMILES must be a non-empty string")
-    if Chem.MolFromSmiles(normalized) is None:
+    mol = Chem.MolFromSmiles(normalized)
+    if mol is None:
         raise ValueError(f"Invalid SMILES: {normalized}")
-    return normalized
+    return Chem.MolToSmiles(mol)
 
 
 SmilesString = Annotated[str, AfterValidator(_validate_smiles)]
@@ -328,6 +336,14 @@ class ScoredMoleculeRecord(MoleculeRecord):
     Candidate_ID: str | None = None
 
 
+PubChemClassification = Literal[
+    "Novel/Not in PubChem",
+    "Known Drug/Medication",
+    "Patent-Referenced",
+    "Known Compound (Unclassified)",
+]
+
+
 class PatentReportRow(BaseModel):
     """Validated novelty-related columns appended to the final report."""
 
@@ -335,6 +351,7 @@ class PatentReportRow(BaseModel):
     Identity_Patents: NonNegativeInt
     Substructure_Patents: NonNegativeInt
     PubChem_Known: Literal["Yes", "No"]
+    PubChem_Classification: PubChemClassification
     PubChem_Novelty_Note: str = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -355,6 +372,7 @@ class UnifiedReportRow(ScoredMoleculeRecord):
     Identity_Patents: NonNegativeInt
     Substructure_Patents: NonNegativeInt
     PubChem_Known: Literal["Yes", "No"]
+    PubChem_Classification: PubChemClassification
     PubChem_Novelty_Note: str = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -374,6 +392,7 @@ class PatentCheckResult(BaseModel):
     pubchem_cid: int | None = None
     identity_patents: NonNegativeInt = 0
     substructure_patents: NonNegativeInt = 0
+    has_drug_info: bool = False
 
     @field_validator("pubchem_cid")
     @classmethod
@@ -394,11 +413,28 @@ class PatentCheckResult(BaseModel):
         pubchem_known: Literal["Yes", "No"] = (
             "No" if (self.pubchem_cid is None or self.pubchem_cid == 0) else "Yes"
         )
+
+        classification: PubChemClassification
+        if pubchem_known == "No":
+            classification = "Novel/Not in PubChem"
+        elif self.has_drug_info:
+            classification = "Known Drug/Medication"
+        elif self.identity_patents > 0 or self.substructure_patents > 0:
+            classification = "Patent-Referenced"
+        else:
+            classification = "Known Compound (Unclassified)"
+
         row = PatentReportRow(
             PubChem_CID=self.pubchem_cid if self.pubchem_cid else "N/A",
             Identity_Patents=self.identity_patents,
             Substructure_Patents=self.substructure_patents,
             PubChem_Known=pubchem_known,
-            PubChem_Novelty_Note="Absence from PubChem does not establish legal novelty.",
+            PubChem_Classification=classification,
+            PubChem_Novelty_Note=(
+                "Classification reflects PubChem's own annotation coverage "
+                "(Drug and Medication Information section presence, plus identity/"
+                "substructure patent cross-references); it is not a formal drug "
+                "registry lookup or a legal freedom-to-operate determination."
+            ),
         )
         return row.model_dump()

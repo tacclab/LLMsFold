@@ -58,8 +58,8 @@ flowchart TD
 - `score = adj_affinity` with over-similarity penalty:
   - If `MaxSim > 0.9`, score is reduced by `0.5 * adj_affinity`.
   - Result is scaled by `synth_factor`, which is `1.0` at `SAS_SCORE_MIN` and `0.0` at `SAS_SCORE_MAX`.
-- Final molecules must pass `SAS <= SAS_SCORE_MAX` (default `10.0`), `ipTM >= IPTM_THRESHOLD`
-  (default `0.5`), and `pLDDT >= PLDDT_THRESHOLD` (default `0.5`).
+- Final molecules must pass `SAS <= SAS_SCORE_MAX` (default `6.0`), `ipTM >= IPTM_THRESHOLD`
+  (default `0.95`), and `pLDDT >= PLDDT_THRESHOLD` (default `0.9`).
 
 ## Similarity-Penalty Registry
 - `MaxSim` (used in the over-similarity penalty above) is computed against `registry_fps`,

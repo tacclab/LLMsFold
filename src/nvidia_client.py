@@ -289,11 +289,28 @@ class BoltzClient:
         return BoltzResult(prediction=prediction, best_structure=best_structure)
 
     @staticmethod
+    def _best_structure_index(prediction: BoltzPrediction) -> int:
+        """Returns the index of the highest-confidence structure.
+
+        With `diffusion_samples > 1`, `prediction.structures` holds one entry
+        per sample; `confidence_scores`/`complex_plddt_scores` are parallel
+        per-sample lists when their length matches. Falls back to index 0
+        when no aligned confidence signal is available, which is always a
+        valid choice (including the common single-sample case).
+        """
+
+        num_structures = len(prediction.structures)
+        for scores in (prediction.confidence_scores, prediction.complex_plddt_scores):
+            if num_structures > 0 and len(scores) == num_structures:
+                return max(range(num_structures), key=lambda i: scores[i])
+        return 0
+
+    @staticmethod
     def _extract_best_structure(
         smiles: str,
         prediction: BoltzPrediction,
     ) -> BestStructureRecord | None:
-        """Extracts the mmCIF structure from the first Boltz structure entry."""
+        """Extracts the mmCIF structure for the highest-confidence Boltz pose."""
 
         if not prediction.structures:
             logger.warning(boltz_structure_missing(smiles))
@@ -305,11 +322,12 @@ class BoltzClient:
             if ligand_affinity.affinity_probability_binary:
                 affinity = ligand_affinity.affinity_probability_binary[0]
 
+        best_index = BoltzClient._best_structure_index(prediction)
         return BestStructureRecord(
             candidate_id="pending",
             smiles=smiles,
             affinity_prob=affinity,
-            structure=prediction.structures[0].structure,
+            structure=prediction.structures[best_index].structure,
         )
 
     async def compute_properties(

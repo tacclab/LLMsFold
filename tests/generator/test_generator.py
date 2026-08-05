@@ -242,12 +242,12 @@ def test_run_full_workflow_generates_report(
         update={"residue_position_map": {210: 10, 498: 12}}
     )
 
-    fake_molecule = object()
     monkeypatch.setattr(
         generator.Chem,
         "MolFromSmiles",
-        lambda smiles, **_kwargs: fake_molecule if smiles in {"CCO", "CCN", "CCC"} else None,
+        lambda smiles, **_kwargs: smiles if smiles in {"CCO", "CCN", "CCC"} else None,
     )
+    monkeypatch.setattr(generator.Chem, "MolToSmiles", lambda mol: mol)
 
     fake_fp_generator = MagicMock()
     fake_fp_generator.GetFingerprint.side_effect = lambda mol: f"fp-{id(mol)}"
@@ -315,12 +315,12 @@ def test_run_drops_pocket_contacts_outside_target_chain(
         update={"target_chain_id": "C", "residue_position_map": {10: 5}}
     )
 
-    fake_molecule = object()
     monkeypatch.setattr(
         generator.Chem,
         "MolFromSmiles",
-        lambda smiles, **_kwargs: fake_molecule if smiles in {"CCO", "CCN", "CCC"} else None,
+        lambda smiles, **_kwargs: smiles if smiles in {"CCO", "CCN", "CCC"} else None,
     )
+    monkeypatch.setattr(generator.Chem, "MolToSmiles", lambda mol: mol)
 
     fake_fp_generator = MagicMock()
     fake_fp_generator.GetFingerprint.side_effect = lambda mol: f"fp-{id(mol)}"
@@ -376,12 +376,12 @@ def test_run_reuses_cached_boltz_score_across_iterations(
         update={"max_iterations": 2, "use_pocket_data": False}
     )
 
-    fake_molecule = object()
     monkeypatch.setattr(
         generator.Chem,
         "MolFromSmiles",
-        lambda smiles, **_kwargs: fake_molecule if smiles == "CCO" else None,
+        lambda smiles, **_kwargs: smiles if smiles == "CCO" else None,
     )
+    monkeypatch.setattr(generator.Chem, "MolToSmiles", lambda mol: mol)
 
     fake_fp_generator = MagicMock()
     fake_fp_generator.GetFingerprint.side_effect = lambda mol: f"fp-{id(mol)}"
@@ -435,12 +435,12 @@ def test_run_similarity_penalty_pool_grows_with_registry(
         update={"max_iterations": 2, "use_pocket_data": False}
     )
 
-    fake_molecule = object()
     monkeypatch.setattr(
         generator.Chem,
         "MolFromSmiles",
-        lambda smiles, **_kwargs: fake_molecule if smiles in {"MOL1", "MOL2"} else None,
+        lambda smiles, **_kwargs: smiles if smiles in {"MOL1", "MOL2"} else None,
     )
+    monkeypatch.setattr(generator.Chem, "MolToSmiles", lambda mol: mol)
 
     fake_fp_generator = MagicMock()
     fake_fp_generator.GetFingerprint.side_effect = lambda mol: f"fp-{id(mol)}"
@@ -470,9 +470,9 @@ def test_run_similarity_penalty_pool_grows_with_registry(
                 {
                     "SMILES": smiles,
                     "pTM": 0.9,
-                    "ipTM": 0.8,
+                    "ipTM": 0.98,
                     "Confidence": 0.7,
-                    "pLDDT": 0.6,
+                    "pLDDT": 0.95,
                     "Affinity_Prob": 0.95,
                     "pIC50": 7.0,
                     "IC50_uM": 0.1,
@@ -520,12 +520,12 @@ def test_run_returns_none_when_no_molecules(
 
     no_pocket_options = pipeline_options.model_copy(update={"use_pocket_data": False})
 
-    fake_molecule = object()
     monkeypatch.setattr(
         generator.Chem,
         "MolFromSmiles",
-        lambda smiles, **_kwargs: fake_molecule if smiles in {"CCO", "CCN", "CCC"} else None,
+        lambda smiles, **_kwargs: smiles if smiles in {"CCO", "CCN", "CCC"} else None,
     )
+    monkeypatch.setattr(generator.Chem, "MolToSmiles", lambda mol: mol)
 
     fake_fp_generator = MagicMock()
     fake_fp_generator.GetFingerprint.side_effect = lambda mol: f"fp-{id(mol)}"
@@ -555,12 +555,12 @@ def test_run_logs_rejection_summary_when_candidates_are_filtered(
 
     no_pocket_options = pipeline_options.model_copy(update={"use_pocket_data": False})
 
-    fake_molecule = object()
     monkeypatch.setattr(
         generator.Chem,
         "MolFromSmiles",
-        lambda smiles, **_kwargs: fake_molecule if smiles in {"CCO", "CCN", "CCC"} else None,
+        lambda smiles, **_kwargs: smiles if smiles in {"CCO", "CCN", "CCC"} else None,
     )
+    monkeypatch.setattr(generator.Chem, "MolToSmiles", lambda mol: mol)
 
     fake_fp_generator = MagicMock()
     fake_fp_generator.GetFingerprint.side_effect = lambda mol: f"fp-{id(mol)}"
@@ -613,12 +613,12 @@ def test_run_filters_candidates_below_iptm_and_plddt_thresholds(
 
     no_pocket_options = pipeline_options.model_copy(update={"use_pocket_data": False})
 
-    fake_molecule = object()
     monkeypatch.setattr(
         generator.Chem,
         "MolFromSmiles",
-        lambda smiles, **_kwargs: fake_molecule if smiles in {"CCO", "CCN", "CCC"} else None,
+        lambda smiles, **_kwargs: smiles if smiles in {"CCO", "CCN", "CCC"} else None,
     )
+    monkeypatch.setattr(generator.Chem, "MolToSmiles", lambda mol: mol)
 
     fake_fp_generator = MagicMock()
     fake_fp_generator.GetFingerprint.side_effect = lambda mol: f"fp-{id(mol)}"
@@ -672,12 +672,12 @@ def test_run_uses_configured_llm_model_and_temperature(
 
     no_pocket_options = pipeline_options.model_copy(update={"use_pocket_data": False})
 
-    fake_molecule = object()
     monkeypatch.setattr(
         generator.Chem,
         "MolFromSmiles",
-        lambda smiles, **_kwargs: fake_molecule if smiles in {"CCO", "CCN", "CCC"} else None,
+        lambda smiles, **_kwargs: smiles if smiles in {"CCO", "CCN", "CCC"} else None,
     )
+    monkeypatch.setattr(generator.Chem, "MolToSmiles", lambda mol: mol)
 
     fake_fp_generator = MagicMock()
     fake_fp_generator.GetFingerprint.side_effect = lambda mol: f"fp-{id(mol)}"
@@ -719,12 +719,12 @@ def test_run_passes_configured_seed_to_groq_and_rng(
 
     no_pocket_options = pipeline_options.model_copy(update={"use_pocket_data": False})
 
-    fake_molecule = object()
     monkeypatch.setattr(
         generator.Chem,
         "MolFromSmiles",
-        lambda smiles, **_kwargs: fake_molecule if smiles in {"CCO", "CCN", "CCC"} else None,
+        lambda smiles, **_kwargs: smiles if smiles in {"CCO", "CCN", "CCC"} else None,
     )
+    monkeypatch.setattr(generator.Chem, "MolToSmiles", lambda mol: mol)
 
     fake_fp_generator = MagicMock()
     fake_fp_generator.GetFingerprint.side_effect = lambda mol: f"fp-{id(mol)}"
@@ -768,12 +768,12 @@ def test_run_falls_back_when_pocket_detection_is_unavailable(
 ) -> None:
     """Missing P2Rank should downgrade the workflow to few-shot mode."""
 
-    fake_molecule = object()
     monkeypatch.setattr(
         generator.Chem,
         "MolFromSmiles",
-        lambda smiles, **_kwargs: fake_molecule if smiles in {"CCO", "CCN", "CCC"} else None,
+        lambda smiles, **_kwargs: smiles if smiles in {"CCO", "CCN", "CCC"} else None,
     )
+    monkeypatch.setattr(generator.Chem, "MolToSmiles", lambda mol: mol)
 
     fake_fp_generator = MagicMock()
     fake_fp_generator.GetFingerprint.side_effect = lambda mol: f"fp-{id(mol)}"
@@ -820,12 +820,12 @@ def test_run_saves_best_structure_payload_above_threshold(
 
     no_pocket_options = pipeline_options.model_copy(update={"use_pocket_data": False})
 
-    fake_molecule = object()
     monkeypatch.setattr(
         generator.Chem,
         "MolFromSmiles",
-        lambda smiles, **_kwargs: fake_molecule if smiles in {"CCO", "CCN", "CCC"} else None,
+        lambda smiles, **_kwargs: smiles if smiles in {"CCO", "CCN", "CCC"} else None,
     )
+    monkeypatch.setattr(generator.Chem, "MolToSmiles", lambda mol: mol)
 
     fake_fp_generator = MagicMock()
     fake_fp_generator.GetFingerprint.side_effect = lambda mol: f"fp-{id(mol)}"

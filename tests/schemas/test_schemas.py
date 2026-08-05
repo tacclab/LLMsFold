@@ -63,15 +63,18 @@ def test_pipeline_options_normalizes_protein_sequence() -> None:
 
 
 @pytest.mark.parametrize(
-    ("cid", "expected_known", "expected_cid_field"),
+    ("cid", "expected_known", "expected_cid_field", "expected_classification"),
     [
-        (None, "No", "N/A"),
-        (0, "No", "N/A"),
-        (12345, "Yes", 12345),
+        (None, "No", "N/A", "Novel/Not in PubChem"),
+        (0, "No", "N/A", "Novel/Not in PubChem"),
+        (12345, "Yes", 12345, "Patent-Referenced"),
     ],
 )
 def test_patent_check_to_report_row(
-    cid: int | None, expected_known: str, expected_cid_field: int | str
+    cid: int | None,
+    expected_known: str,
+    expected_cid_field: int | str,
+    expected_classification: str,
 ) -> None:
     """Patent report rows are normalized for report-friendly fields."""
 
@@ -82,7 +85,26 @@ def test_patent_check_to_report_row(
     assert row["Identity_Patents"] == 2
     assert row["Substructure_Patents"] == 4
     assert row["PubChem_Known"] == expected_known
-    assert "legal novelty" in str(row["PubChem_Novelty_Note"])
+    assert row["PubChem_Classification"] == expected_classification
+    assert "not a formal drug registry lookup" in str(row["PubChem_Novelty_Note"])
+
+
+def test_patent_check_to_report_row_classifies_known_drug() -> None:
+    """A CID with documented drug/medication info is classified as a known drug."""
+
+    result = PatentCheckResult(pubchem_cid=2244, has_drug_info=True)
+    row = result.to_report_row()
+
+    assert row["PubChem_Classification"] == "Known Drug/Medication"
+
+
+def test_patent_check_to_report_row_classifies_unclassified_known_compound() -> None:
+    """A CID with no drug info and no patent hits is an unclassified known compound."""
+
+    result = PatentCheckResult(pubchem_cid=999, has_drug_info=False)
+    row = result.to_report_row()
+
+    assert row["PubChem_Classification"] == "Known Compound (Unclassified)"
 
 
 def test_boltz_prediction_ignores_extra_fields() -> None:
@@ -157,6 +179,21 @@ def test_model_output_from_raw_payload_filters_invalid_and_duplicate_smiles() ->
     )
 
     assert parsed.smiles_list() == ["CCO", "CCN"]
+
+
+def test_model_output_deduplicates_across_smiles_notations() -> None:
+    """The same molecule written two different ways is recognized as one entry.
+
+    Regression test: before canonicalizing in `_validate_smiles`, raw-string
+    dedup would treat a Kekule-form and an aromatic-form SMILES for benzene
+    as two distinct molecules, double-counting and double-scoring it.
+    """
+
+    parsed = ModelOutput.from_raw_payload(
+        {"molecules": ["C1=CC=CC=C1", "c1ccccc1"]}  # both are benzene
+    )
+
+    assert parsed.smiles_list() == ["c1ccccc1"]
 
 
 def test_model_output_requires_at_least_one_valid_molecule() -> None:

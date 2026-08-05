@@ -323,16 +323,24 @@ class MoleculeGenerator:
                 "Step 1/%s: loading few-shot examples from %s", total_steps, options.few_shot_csv
             )
             few_shot_data = pd.read_csv(options.few_shot_csv, sep=";")
-            positives = few_shot_data["Smiles"].dropna().tolist()[:SEED_SMILES_LIMIT]
+            raw_positives = few_shot_data["Smiles"].dropna().tolist()[:SEED_SMILES_LIMIT]
+            # Canonicalize seeds the same way every LLM-generated SMILES is
+            # canonicalized (via SmilesString validation), so a seed and a
+            # differently-written duplicate proposed later are recognized as
+            # the same molecule for similarity/dedup purposes.
+            positives: list[str] = []
+            positive_mols: list[Any] = []
+            for smiles in raw_positives:
+                mol = Chem.MolFromSmiles(smiles)
+                if mol is None:
+                    continue
+                positives.append(Chem.MolToSmiles(mol))
+                positive_mols.append(mol)
 
             fingerprint_generator = rdFingerprintGenerator.GetMorganGenerator(
                 radius=MORGAN_FINGERPRINT_RADIUS
             )
-            target_fps = [
-                fingerprint_generator.GetFingerprint(Chem.MolFromSmiles(smiles))
-                for smiles in positives
-                if Chem.MolFromSmiles(smiles)
-            ]
+            target_fps = [fingerprint_generator.GetFingerprint(mol) for mol in positive_mols]
             step_progress.update(1)
             step_progress.set_postfix_str("few-shot ready")
             logger.info(

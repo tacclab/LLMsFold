@@ -40,8 +40,10 @@ DEFAULT_POCKET_BOX_MARGIN_ANGSTROM = 5.0
 # oversized/noisy pocket detection can't produce an unbounded search box.
 DEFAULT_POCKET_MAX_BOX_ANGSTROM = 30.0
 
-DEFAULT_IPTM_THRESHOLD = 0.5
-DEFAULT_PLDDT_THRESHOLD = 0.5
+# Matches the Methods/Results claim of "ipTM ~= 0.95, ligand pLDDT > 0.9" for
+# advanced candidates.
+DEFAULT_IPTM_THRESHOLD = 0.95
+DEFAULT_PLDDT_THRESHOLD = 0.9
 
 SEED_SMILES_LIMIT = 5
 CONTEXT_LEADS_WINDOW = 5
@@ -49,7 +51,10 @@ NEGATIVE_LEADS_WINDOW = 3
 ALREADY_PROPOSED_WINDOW = 10
 MORGAN_FINGERPRINT_RADIUS = 2
 ADJ_AFFINITY_THRESHOLD = 0.6
-SAS_SCORE_MAX = 10.0
+# Matches the Methods claim of excluding candidates with SAScore > 6; this is
+# also what allows the "strong binder but too hard to synthesize" contrastive
+# negative-example pool to ever fire.
+SAS_SCORE_MAX = 6.0
 # Ertl's synthetic accessibility score is defined on a 1 (trivial) to 10 (very
 # hard) scale; 1 anchors the "easiest possible" end of the reward normalization.
 SAS_SCORE_MIN = 1.0
