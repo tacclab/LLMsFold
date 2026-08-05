@@ -23,6 +23,8 @@ from src.schemas import PatentCheckResult
 logger = get_logger(__name__)
 
 _PUG_REST_BASE_URL = "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound"
+_PUG_VIEW_BASE_URL = "https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/data/compound"
+_DRUG_INFO_HEADING = "Drug and Medication Information"
 _MAX_SUBSTRUCTURE_CIDS = 10
 _PENDING_LISTKEY_STATUS_CODES = {202, 400}
 
@@ -60,6 +62,13 @@ class PubChemService:
         if result.pubchem_cid:
             try:
                 result.identity_patents = await self._fetch_identity_patents(result.pubchem_cid)
+            except PubChemError as exc:
+                logger.warning(pubchem_query_error(smiles, exc))
+
+            try:
+                result.has_drug_info = await self._fetch_has_drug_medication_info(
+                    result.pubchem_cid
+                )
             except PubChemError as exc:
                 logger.warning(pubchem_query_error(smiles, exc))
 
@@ -131,6 +140,31 @@ class PubChemService:
             return 0
         raise PubChemHTTPStatusError(
             "PubChem identity patent lookup",
+            response.status_code,
+            self._response_detail(response),
+        )
+
+    async def _fetch_has_drug_medication_info(self, cid: int) -> bool:
+        """Returns whether PubChem documents this CID as a drug/medication.
+
+        Uses PUG View's heading-filtered lookup: PubChem returns HTTP 200
+        when the "Drug and Medication Information" section exists for the
+        compound (drug indications, clinical trials, labeling, etc.) and
+        HTTP 404 (`PUGVIEW.NotFound`) when it doesn't. This distinguishes an
+        annotated drug/medication from a compound that is merely registered
+        or patent-referenced without documented pharmacological use.
+        """
+
+        response = await self._get(
+            f"{_PUG_VIEW_BASE_URL}/{cid}/JSON?heading={quote(_DRUG_INFO_HEADING)}",
+            stage="PubChem drug/medication info lookup",
+        )
+        if response.status_code == 200:
+            return True
+        if response.status_code == 404:
+            return False
+        raise PubChemHTTPStatusError(
+            "PubChem drug/medication info lookup",
             response.status_code,
             self._response_detail(response),
         )

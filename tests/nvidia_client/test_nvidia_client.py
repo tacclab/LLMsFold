@@ -144,6 +144,34 @@ def test_make_nvcf_call_extracts_best_structure_payload() -> None:
     assert result.best_structure.structure == "MOCK_MMCIF_CONTENT"
 
 
+def test_make_nvcf_call_picks_highest_confidence_structure_not_first() -> None:
+    """With multiple diffusion samples, the highest-confidence structure wins.
+
+    Regression test: `_extract_best_structure` previously always returned
+    `structures[0]`, ignoring per-sample confidence even when
+    `diffusion_samples > 1` produced several candidate poses.
+    """
+
+    payload = _make_payload(
+        structures=[
+            {"structure": "POSE_0_LOW_CONF", "format": "mmcif"},
+            {"structure": "POSE_1_HIGH_CONF", "format": "mmcif"},
+            {"structure": "POSE_2_MID_CONF", "format": "mmcif"},
+        ],
+        confidence_scores=[0.3, 0.9, 0.6],
+        affinities={"L1": {"affinity_probability_binary": [0.95], "affinity_pic50": [7.0]}},
+    )
+
+    http_client = MagicMock()
+    http_client.post = AsyncMock(return_value=FakeResponse(200, payload))
+
+    client = BoltzClient(api_key="token", http_client=http_client)
+    result = asyncio.run(client.make_nvcf_call("CCO", "MKT"))
+
+    assert result.best_structure is not None
+    assert result.best_structure.structure == "POSE_1_HIGH_CONF"
+
+
 def test_make_nvcf_call_no_structure_when_structures_empty() -> None:
     """Empty structures list means best_structure is None (no file to persist)."""
 
@@ -254,11 +282,11 @@ def test_compute_properties_builds_dataframe(monkeypatch: pytest.MonkeyPatch) ->
         AsyncMock(return_value=BoltzResult(prediction=prediction, best_structure=best_structure)),
     )
 
-    fake_molecule = object()
     monkeypatch.setattr(
         "src.nvidia_client.Chem.MolFromSmiles",
-        lambda smiles: fake_molecule if smiles == "CCO" else None,
+        lambda smiles: smiles if smiles == "CCO" else None,
     )
+    monkeypatch.setattr("src.nvidia_client.Chem.MolToSmiles", lambda mol: mol)
     monkeypatch.setattr("src.nvidia_client.Descriptors.MolWt", lambda _mol: 46.07)
     monkeypatch.setattr("src.nvidia_client.Descriptors.MolLogP", lambda _mol: 0.2)
     monkeypatch.setattr("src.nvidia_client.Descriptors.TPSA", lambda _mol: 20.23)
@@ -318,11 +346,11 @@ def test_compute_properties_updates_progress_for_each_candidate(
     client = BoltzClient(api_key="token", http_client=http_client)
     monkeypatch.setattr(client, "make_nvcf_call", AsyncMock(return_value=BoltzResult(prediction=prediction)))
 
-    fake_molecule = object()
     monkeypatch.setattr(
         "src.nvidia_client.Chem.MolFromSmiles",
-        lambda smiles: fake_molecule if smiles == "CCO" else None,
+        lambda smiles: smiles if smiles == "CCO" else None,
     )
+    monkeypatch.setattr("src.nvidia_client.Chem.MolToSmiles", lambda mol: mol)
     monkeypatch.setattr("src.nvidia_client.Descriptors.MolWt", lambda _mol: 46.07)
     monkeypatch.setattr("src.nvidia_client.Descriptors.MolLogP", lambda _mol: 0.2)
     monkeypatch.setattr("src.nvidia_client.Descriptors.TPSA", lambda _mol: 20.23)

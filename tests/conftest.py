@@ -51,9 +51,9 @@ def scored_dataframe() -> pd.DataFrame:
             {
                 "SMILES": "CCO",
                 "pTM": 0.9,
-                "ipTM": 0.8,
+                "ipTM": 0.98,
                 "Confidence": 0.7,
-                "pLDDT": 0.6,
+                "pLDDT": 0.95,
                 "Affinity_Prob": 0.95,
                 "pIC50": 7.0,
                 "IC50_uM": 0.1,
