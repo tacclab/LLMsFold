@@ -59,6 +59,13 @@ criteria:
   not assumed to be `"A"` -- see `nvidia-client.md` for how these get remapped for Boltz)
 - Box dims: `{center_x/y/z, size_x/y/z, raw_size_x/y/z}` (deepchem backend only)
 
-## P2Rank Path
+## P2Rank Path (optional, not used by the pipeline)
+- **Opt-in only.** `get_binding_pockets_and_residues` defaults to `backend="deepchem"`,
+  which is the only backend `MoleculeGenerator.run` ever invokes. P2Rank must be
+  requested explicitly with `backend="p2rank"`.
+- It requires an external `prank` binary that is not a Python dependency, and it
+  returns **only a residue list** -- no pocket center, no box dimensions, and none
+  of the geometric filtering described above. Results are therefore not
+  interchangeable with the deepchem backend.
 - `setup_p2rank` searches for `prank` executable under project directories and makes it executable.
 - `get_p2rank_pocket` executes `prank predict` and parses top `residue_ids` from generated CSV.

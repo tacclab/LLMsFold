@@ -12,8 +12,11 @@ cat <<'EOF'
 |                                                                              |
 |                                  LLMsFold                                    |
 +------------------------------------------------------------------------------+
-Authors: W. W. Waththe Liyanage, Fabio Bove, Dario Righelli, Salvatore Romano
-         Rosa Visone, Marilena V. Iorio, Pietro Lio, Cristian Taccioli
+Authors: Wageesha Widuranga, Davide Rigoni, Fabio Bove, Dario Righelli
+         Salvatore Romano, Rosa Visone, Marilena V. Iorio, Marco Grassia
+         Giuseppe Mangioni, Pietro Lio, Cristian Taccioli
+Groups : TaccLab   https://tacclab.org/
+         NeoraLab  https://www.neoralab.com/
 EOF
 }
 
