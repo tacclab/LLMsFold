@@ -147,6 +147,11 @@ LLMsFold/
 |  `- core/{config,constants,logging}.py
 |- tests/
 |- data/
+|  |- acvr1_R206H_clean.pdb        # ACVR1 target (R206H mutant modelled)
+|  |- 19CD_only_rare_disorder.pdb  # CD19 target
+|  |- smiles_ACVR1.csv             # ACVR1 seed molecules + PubChem CIDs
+|  |- few_shot_cd19.csv            # CD19/BCR seed molecules + PubChem CIDs
+|  `- few_shot_smiles_patent.csv   # legacy default seed set
 |- images/
 `- doc/
 ```
@@ -175,7 +180,7 @@ Fill in API keys and adjust paths as needed.
 | `GROQ_API_KEY` | Yes | - | Groq API key for LLM generation |
 | `NVIDIA_API_KEY` | Yes | - | NVIDIA API key for Boltz predictions |
 | `PDB_FILE` | No | `data/acvr1_R206H_clean.pdb` | Target protein PDB path |
-| `FEW_SHOT_CSV` | No | `data/few_shot_smiles_patent.csv` | Seed molecules CSV (`;` separated, `Smiles` column) |
+| `FEW_SHOT_CSV` | No | `data/few_shot_smiles_patent.csv` | Seed molecules CSV (`;` separated, `Smiles` column; optional `PubChem_CID` column for provenance). Use `data/smiles_ACVR1.csv` for ACVR1 and `data/few_shot_cd19.csv` for CD19. Only the first `SEED_SMILES_LIMIT` (5) rows are used. |
 | `OUTPUT_DIR` | No | `results` | Output directory |
 | `MAX_ITERATIONS` | No | `3` | RL-style loop iterations |
 | `MAX_SAMPLES` | No | `5` | LLM proposals per iteration |

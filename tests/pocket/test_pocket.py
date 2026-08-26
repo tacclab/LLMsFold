@@ -299,10 +299,15 @@ def test_expand_box_dimension(size: float, expected: float) -> None:
     assert pocket._expand_box_dimension(size, 5.0, 30.0) == pytest.approx(expected)
 
 
-def test_get_binding_pockets_and_residues_uses_p2rank_by_default(
+def test_get_binding_pockets_and_residues_p2rank_backend_is_opt_in(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Default backend uses P2Rank wrapper output."""
+    """P2Rank is reachable only when explicitly requested, never by default.
+
+    The pipeline itself always runs the deepchem backend; the default was
+    previously "p2rank", which meant the documented default disagreed with
+    the code path actually exercised in every reported run.
+    """
 
     calls: list[str] = []
 
@@ -311,12 +316,41 @@ def test_get_binding_pockets_and_residues_uses_p2rank_by_default(
         return "ALA10_A"
 
     monkeypatch.setattr(pocket, "get_p2rank_pocket", _fake_get_p2rank_pocket)
-    center, residues, box_dims = pocket.get_binding_pockets_and_residues("protein.pdb")
+    center, residues, box_dims = pocket.get_binding_pockets_and_residues(
+        "protein.pdb", backend="p2rank"
+    )
 
     assert center == "P2Rank"
     assert residues == "ALA10_A"
     assert box_dims is None
     assert calls == ["results"]
+
+
+def test_get_binding_pockets_and_residues_defaults_to_deepchem_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The default backend is deepchem -- the one the pipeline actually uses."""
+
+    monkeypatch.setattr(
+        pocket,
+        "get_p2rank_pocket",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("P2Rank must not run by default")),
+    )
+
+    selected = DummyPocket(center=(1.0, 2.0, 3.0), spans=(9.0, 9.0, 9.0))
+    finder_instance = MagicMock()
+    finder_instance.find_pockets.return_value = [selected]
+    finder_cls = MagicMock(return_value=finder_instance)
+    fake_deepchem = types.SimpleNamespace(
+        dock=types.SimpleNamespace(ConvexHullPocketFinder=finder_cls),
+    )
+    monkeypatch.setitem(__import__("sys").modules, "deepchem", fake_deepchem)
+    monkeypatch.setattr(pocket.Chem, "MolFromPDBFile", lambda _path: None)
+
+    center, _residues, box_dims = pocket.get_binding_pockets_and_residues("protein.pdb")
+
+    assert center == "Center: 1.00, 2.00, 3.00"
+    assert box_dims is not None
 
 
 def test_get_binding_pockets_and_residues_no_pockets(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -171,7 +171,7 @@ def _expand_box_dimension(size: float, margin: float, max_dimension: float) -> f
 def get_binding_pockets_and_residues(
     pdb_path: str | Path,
     output_dir: str | Path = "results",
-    backend: str = "p2rank",
+    backend: str = "deepchem",
     pocket_index: int = -1,
 ) -> tuple[str, str, dict[str, float] | None]:
     """Finds pockets and residues near the chosen pocket, using two
@@ -182,6 +182,13 @@ def get_binding_pockets_and_residues(
     Args:
         pdb_path: Path to target protein PDB file.
         output_dir: Directory where detected pocket summary is saved.
+        backend: Pocket detection backend. ``"deepchem"`` (the default, and
+            the only backend the pipeline itself uses) runs DeepChem's
+            ConvexHullPocketFinder and returns full geometry. ``"p2rank"``
+            is an optional alternative that shells out to an external
+            ``prank`` binary; it returns only a residue list, with no
+            center or box dimensions, and is not used by
+            `MoleculeGenerator.run`.
         pocket_index: Explicit 0-based pocket index to force. Any value
             outside `[0, len(pockets))` -- including the default `-1` --
             triggers automatic selection instead.

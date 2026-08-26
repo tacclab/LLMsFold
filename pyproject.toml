@@ -15,7 +15,6 @@ dependencies = [
     "rdkit>=2025.9.3",
     "tenacity",
     "tqdm>=4.67.1",
-    "neoralab-sascorer>=0.1.5",
 ]
 
 [dependency-groups]
