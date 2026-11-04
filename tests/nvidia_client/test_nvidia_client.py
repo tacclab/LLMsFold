@@ -12,10 +12,19 @@ from src.schemas import BestStructureRecord, BoltzPrediction, PocketContact
 class FakeResponse:
     """Simple stand-in for httpx.Response used in async client tests."""
 
-    def __init__(self, status_code: int, payload: dict, headers: dict | None = None) -> None:
+    def __init__(
+        self,
+        status_code: int,
+        payload: dict,
+        headers: dict | None = None,
+        text: str = "",
+    ) -> None:
         self.status_code = status_code
         self._payload = payload
         self.headers = headers or {}
+        # The client logs the body when it rejects a response, so the double
+        # has to carry one.
+        self.text = text
 
     def json(self) -> dict:
         return self._payload
@@ -267,9 +276,11 @@ def test_poll_task_returns_none_on_error_status(monkeypatch: pytest.MonkeyPatch)
 def test_compute_properties_builds_dataframe(monkeypatch: pytest.MonkeyPatch) -> None:
     """Property computation collects one row per valid molecule with successful prediction."""
 
-    prediction = BoltzPrediction.model_validate(_make_payload(
-        affinities={"L1": {"affinity_probability_binary": [0.5], "affinity_pic50": [6.0]}},
-    ))
+    prediction = BoltzPrediction.model_validate(
+        _make_payload(
+            affinities={"L1": {"affinity_probability_binary": [0.5], "affinity_pic50": [6.0]}},
+        )
+    )
     best_structure = BestStructureRecord(
         candidate_id="pending", smiles="CCO", affinity_prob=0.5, structure="data_\nloop_"
     )
@@ -305,9 +316,9 @@ def test_compute_properties_builds_dataframe(monkeypatch: pytest.MonkeyPatch) ->
     )
 
     assert list(dataframe["SMILES"]) == ["CCO"]
-    assert dataframe.iloc[0]["Affinity_Prob"] == pytest.approx(0.5)
-    assert dataframe.iloc[0]["pIC50"] == pytest.approx(6.0)
-    assert dataframe.iloc[0]["IC50_uM"] == pytest.approx(1.0)
+    assert dataframe.iloc[0]["Boltz2_Binding_Probability"] == pytest.approx(0.5)
+    assert dataframe.iloc[0]["Boltz2_Predicted_Affinity_pIC50"] == pytest.approx(6.0)
+    assert dataframe.iloc[0]["Boltz2_Predicted_Affinity_uM"] == pytest.approx(1.0)
     # structures array is present → best_structure should be populated
     assert len(best_structures) == 1
     assert best_structures[0].structure == "data_\nloop_"
@@ -318,9 +329,11 @@ def test_compute_properties_updates_progress_for_each_candidate(
 ) -> None:
     """Boltz scoring progress should advance once per input candidate."""
 
-    prediction = BoltzPrediction.model_validate(_make_payload(
-        affinities={"L1": {"affinity_probability_binary": [0.5], "affinity_pic50": [6.0]}},
-    ))
+    prediction = BoltzPrediction.model_validate(
+        _make_payload(
+            affinities={"L1": {"affinity_probability_binary": [0.5], "affinity_pic50": [6.0]}},
+        )
+    )
 
     class DummyProgressBar:
         def __init__(self) -> None:
@@ -344,7 +357,9 @@ def test_compute_properties_updates_progress_for_each_candidate(
 
     http_client = MagicMock()
     client = BoltzClient(api_key="token", http_client=http_client)
-    monkeypatch.setattr(client, "make_nvcf_call", AsyncMock(return_value=BoltzResult(prediction=prediction)))
+    monkeypatch.setattr(
+        client, "make_nvcf_call", AsyncMock(return_value=BoltzResult(prediction=prediction))
+    )
 
     monkeypatch.setattr(
         "src.nvidia_client.Chem.MolFromSmiles",

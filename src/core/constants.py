@@ -8,6 +8,13 @@ DEFAULT_MAX_SAMPLES = 5
 
 DEFAULT_LLM_MODEL = "llama-3.3-70b-versatile"
 DEFAULT_LLM_TEMPERATURE = 0.8
+# Providers meter output tokens per minute and reject a request whose
+# *expected* output exceeds the budget, so leaving this unset makes the
+# provider assume the model's full context and refuse pre-emptively.
+DEFAULT_LLM_MAX_TOKENS = 800
+# Rate-limit windows are measured in minutes, so a 429 needs several
+# patient retries rather than the SDK default of two.
+DEFAULT_LLM_MAX_RETRIES = 6
 
 DEFAULT_BOLTZ_REQUEST_TIMEOUT_SECONDS = 400.0
 DEFAULT_BOLTZ_MAX_WAIT_SECONDS = 600
@@ -25,6 +32,10 @@ DEFAULT_BOLTZ_WITHOUT_POTENTIALS = True
 DEFAULT_PUBCHEM_TIMEOUT_SECONDS = 10.0
 DEFAULT_PUBCHEM_LISTKEY_ATTEMPTS = 3
 DEFAULT_PUBCHEM_POLL_INTERVAL_SECONDS = 2.0
+# PubChem asks callers to stay at or below five requests per second.
+# These keep a large run inside that budget; raising them risks a block.
+DEFAULT_PUBCHEM_MAX_CONCURRENCY = 4
+DEFAULT_PUBCHEM_MIN_REQUEST_INTERVAL_SECONDS = 0.25
 
 DEFAULT_P2RANK_OUTPUT_DIRNAME = "p2rank_output"
 DEFAULT_DEEPCHEM_POCKET_PAD = 5.0
@@ -48,9 +59,29 @@ DEFAULT_PLDDT_THRESHOLD = 0.9
 SEED_SMILES_LIMIT = 5
 CONTEXT_LEADS_WINDOW = 5
 NEGATIVE_LEADS_WINDOW = 3
+# How many previously proposed molecules are echoed back in the prompt so
+# the model avoids repeating them. On a long run a short window means the
+# model cannot see most of what it has already made and re-proposes it;
+# duplicates are cached rather than rescored, so the cost is wasted
+# generation calls rather than wasted evaluations.
 ALREADY_PROPOSED_WINDOW = 10
 MORGAN_FINGERPRINT_RADIUS = 2
 ADJ_AFFINITY_THRESHOLD = 0.6
+# Tanimoto similarity above which a candidate starts losing reward for
+# resembling something already registered. The penalty ramps linearly from
+# zero at this threshold to SIMILARITY_PENALTY_FRACTION of the binding
+# probability at similarity 1.0, rather than switching on all at once: a
+# step function at 0.9 left a candidate at 0.89 similarity entirely
+# unpenalized, which is how a run could converge on one scaffold family
+# while every pairwise comparison stayed just under the cutoff.
+SIMILARITY_PENALTY_THRESHOLD = 0.6
+# Largest share of the binding probability the similarity term can remove,
+# reached only at similarity 1.0.
+SIMILARITY_PENALTY_FRACTION = 0.5
+# A generated molecule is fed back as a new prompt lead only if its Tanimoto
+# similarity to every lead already in the pool is below this value, which
+# keeps the feedback loop from collapsing onto a single scaffold family.
+DEFAULT_LEAD_DIVERSITY_MAX_SIM = 0.7
 # Matches the Methods claim of excluding candidates with SAScore > 6; this is
 # also what allows the "strong binder but too hard to synthesize" contrastive
 # negative-example pool to ever fire.
@@ -60,6 +91,8 @@ SAS_SCORE_MAX = 6.0
 SAS_SCORE_MIN = 1.0
 
 UNIFIED_REPORT_FILENAME = "unified_report.csv"
+RUN_MANIFEST_FILENAME = "run_manifest.json"
+REFERENCE_BASELINE_FILENAME = "reference_baseline.csv"
 
 DEFAULT_LOG_LEVEL = "INFO"
 DEFAULT_LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"

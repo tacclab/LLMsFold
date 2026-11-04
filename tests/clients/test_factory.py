@@ -38,7 +38,7 @@ def test_get_cached_http_client_reuses_single_instance(monkeypatch: pytest.Monke
 def test_get_cached_groq_client_is_keyed(monkeypatch: pytest.MonkeyPatch, api_key: str) -> None:
     """Groq clients are cached by API key."""
 
-    groq_ctor = MagicMock(side_effect=lambda api_key: {"client_for": api_key})
+    groq_ctor = MagicMock(side_effect=lambda api_key, **_kwargs: {"client_for": api_key})
     monkeypatch.setattr(factory, "Groq", groq_ctor)
 
     first = factory.get_cached_groq_client(api_key)
@@ -53,7 +53,7 @@ def test_get_cached_groq_client_creates_distinct_entries_for_distinct_keys(
 ) -> None:
     """Different API keys should produce different cached objects."""
 
-    groq_ctor = MagicMock(side_effect=lambda api_key: {"client_for": api_key})
+    groq_ctor = MagicMock(side_effect=lambda api_key, **_kwargs: {"client_for": api_key})
     monkeypatch.setattr(factory, "Groq", groq_ctor)
 
     key_a_client = factory.get_cached_groq_client("k1")

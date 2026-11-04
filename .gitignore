@@ -156,3 +156,13 @@ cython_debug/
 
 # Credentials
 credentials/
+# Manuscript sources and LaTeX build output. The paper is written in
+# Overleaf; keeping its figures and build artefacts here would add ~36 MB
+# to every clone of what is otherwise a code repository.
+LLMsFold_chem/
+sn-article-template/
+sn-article-template.zip
+*.aux
+*.bbl
+*.blg
+*.synctex.gz

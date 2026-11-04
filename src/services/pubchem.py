@@ -1,7 +1,8 @@
 """Async PubChem API utilities."""
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
 from typing import Any
 from urllib.parse import quote
 
@@ -29,6 +30,44 @@ _MAX_SUBSTRUCTURE_CIDS = 10
 _PENDING_LISTKEY_STATUS_CODES = {202, 400}
 
 
+class _RateGate:
+    """Caps how fast requests leave this process for PubChem.
+
+    PubChem asks callers to stay at or below five requests per second and
+    blocks addresses that do not. The pipeline fans novelty checks out
+    across every candidate at once, so on a large run the unthrottled
+    request rate is bounded only by how many candidates there are --- a
+    1000-molecule run would open several thousand connections in a burst
+    and be refused outright.
+
+    Both limits are needed: the semaphore bounds how many requests are in
+    flight, and the interval bounds how closely their starts are spaced, so
+    a batch of fast responses cannot still exceed the rate.
+    """
+
+    def __init__(self, max_concurrency: int, min_interval_seconds: float) -> None:
+        """Creates a gate allowing `max_concurrency` requests in flight."""
+
+        self._semaphore = asyncio.Semaphore(max_concurrency)
+        self._min_interval = min_interval_seconds
+        self._lock = asyncio.Lock()
+        self._last_started_at = 0.0
+
+    @asynccontextmanager
+    async def hold(self) -> AsyncIterator[None]:
+        """Blocks until another request may be sent, then releases the slot."""
+
+        async with self._semaphore:
+            async with self._lock:
+                wait_for = self._min_interval - (
+                    asyncio.get_running_loop().time() - self._last_started_at
+                )
+                if wait_for > 0:
+                    await asyncio.sleep(wait_for)
+                self._last_started_at = asyncio.get_running_loop().time()
+            yield
+
+
 class PubChemService:
     """Queries PubChem identity and substructure patent signals."""
 
@@ -41,6 +80,10 @@ class PubChemService:
 
         self._settings = settings or get_generator_settings()
         self._client = http_client or get_cached_http_client()
+        self._rate_gate = _RateGate(
+            max_concurrency=self._settings.pubchem_max_concurrency,
+            min_interval_seconds=self._settings.pubchem_min_request_interval_seconds,
+        )
 
     async def check_patents(self, smiles: str) -> PatentCheckResult:
         """Fetches PubChem identifiers and patent-derived novelty metrics.
@@ -234,10 +277,11 @@ class PubChemService:
         """Executes an HTTP request and normalizes transport failures."""
 
         try:
-            return await self._client.get(
-                url,
-                timeout=self._settings.pubchem_timeout_seconds,
-            )
+            async with self._rate_gate.hold():
+                return await self._client.get(
+                    url,
+                    timeout=self._settings.pubchem_timeout_seconds,
+                )
         except httpx.HTTPError as exc:
             raise PubChemTransportError(stage, exc) from exc
 
