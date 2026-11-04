@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from rdkit import Chem, DataStructs
 from rdkit.Chem import Descriptors, rdFingerprintGenerator
 
+from src.core.constants import SIMILARITY_PENALTY_FRACTION, SIMILARITY_PENALTY_THRESHOLD
 from src.core.exceptions import SequenceExtractionError
 from src.core.logging import get_logger
 from src.core.messages import no_smiles_parsed, pdb_file_unreadable, pdb_sequence_missing
@@ -50,9 +51,7 @@ def _sequence_from_residue_codes(residue_codes: Sequence[str]) -> str:
     return "".join(_PDB_RESIDUE_TO_ONE_LETTER.get(code, "X") for code in residue_codes)
 
 
-def _build_seqres_position_map(
-    lines: list[str], chain_id: str, sequence: str
-) -> dict[int, int]:
+def _build_seqres_position_map(lines: list[str], chain_id: str, sequence: str) -> dict[int, int]:
     """Maps PDB residue numbers onto 1-based positions in a SEQRES sequence.
 
     `SEQRES` records list residue names only -- no residue numbers -- so the
@@ -227,22 +226,47 @@ def extract_residue_position_map(pdb_path: str) -> dict[int, int]:
     return position_map
 
 
-def calculate_heuristic_score(row: pd.Series) -> float:
+def calculate_heuristic_score(
+    row: pd.Series,
+    *,
+    similarity_penalty_threshold: float = SIMILARITY_PENALTY_THRESHOLD,
+    similarity_penalty_fraction: float = SIMILARITY_PENALTY_FRACTION,
+) -> float:
     """Computes heuristic ranking score with over-similarity and synthesizability weighting.
 
+    The similarity term ramps linearly: no penalty at or below
+    `similarity_penalty_threshold`, rising to `similarity_penalty_fraction`
+    of the binding probability at similarity 1.0. A step function instead
+    left everything below the cutoff completely unpenalized, so a run could
+    fill its output with near-duplicates that each sat just under the line
+    and still scored as though they were novel.
+
     Args:
-        row: A dataframe row with `adj_affinity`, `MaxSim`, and `synth_factor`.
+        row: A dataframe row with `Adj_Binding_Probability`, `MaxSim`, and
+            `synth_factor`.
+        similarity_penalty_threshold: Similarity at which the penalty starts.
+        similarity_penalty_fraction: Largest share of the binding probability
+            the penalty can remove, reached at similarity 1.0.
 
     Returns:
-        Score value used to rank candidates: the novelty-adjusted affinity
-        scaled by `synth_factor` (1.0 for the easiest-to-synthesize molecules,
-        0.0 for molecules at or beyond the SAS ceiling).
+        Score value used to rank candidates: the novelty-adjusted binding
+        probability scaled by `synth_factor` (1.0 for the easiest-to-synthesize
+        molecules, 0.0 for molecules at or beyond the SAS ceiling).
     """
 
-    affinity = float(row["adj_affinity"])
-    similarity_penalty = 0.5 * affinity if float(row["MaxSim"]) > 0.9 else 0.0
-    affinity_component = affinity - similarity_penalty
-    return affinity_component * float(row["synth_factor"])
+    binding_probability = float(row["Adj_Binding_Probability"])
+    max_similarity = float(row["MaxSim"])
+
+    headroom = 1.0 - similarity_penalty_threshold
+    if max_similarity <= similarity_penalty_threshold:
+        ramp = 0.0
+    elif headroom <= 0.0:
+        ramp = 1.0
+    else:
+        ramp = min(1.0, (max_similarity - similarity_penalty_threshold) / headroom)
+
+    similarity_penalty = similarity_penalty_fraction * ramp * binding_probability
+    return (binding_probability - similarity_penalty) * float(row["synth_factor"])
 
 
 def passes_lipinski(mol: Any) -> bool:

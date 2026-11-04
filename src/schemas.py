@@ -14,6 +14,8 @@ from pydantic import (
 )
 from rdkit import Chem
 
+from src.core.constants import DEFAULT_POCKET_CONTACT_DISTANCE
+
 
 def _validate_smiles(value: str) -> str:
     """Validates a SMILES string with RDKit and returns its canonical form.
@@ -142,6 +144,19 @@ class PipelineOptions(BaseModel):
             1-based positions within `protein_sequence` (e.g. 1-294). Pocket
             residues without an entry here fall in a gap/disordered region
             and must not be sent to Boltz.
+        score_references: If `True`, the few-shot reference inhibitors are
+            scored through the same pipeline as generated candidates and
+            written to their own baseline report. Reference molecules never
+            enter the candidate ranking, the similarity registry, or the
+            prompt feedback pools.
+        pocket_residues: Explicit residue selection, e.g. ``"A:203, A:207"``.
+        pocket_ligand: Residue name of a bound ligand whose surroundings
+            define the pocket, e.g. ``"ATP"`` or ``"ATP:A:401"``.
+        pocket_center: Explicit pocket center in the structure's own frame.
+        pocket_index: 0-based index into the detected pocket list, to pin a
+            specific pocket instead of accepting automatic selection.
+        pocket_contact_distance: Radius used by the ligand and center modes
+            when collecting surrounding residues.
     """
 
     pdb_path: Path
@@ -153,6 +168,61 @@ class PipelineOptions(BaseModel):
     use_pocket_data: bool = True
     target_chain_id: str = Field(default="A", min_length=1, max_length=1)
     residue_position_map: dict[int, int] = Field(default_factory=dict)
+    score_references: bool = False
+    pocket_residues: str | None = None
+    pocket_ligand: str | None = None
+    pocket_center: tuple[float, float, float] | None = None
+    pocket_index: int | None = Field(default=None, ge=0)
+    pocket_contact_distance: float = Field(default=DEFAULT_POCKET_CONTACT_DISTANCE, gt=0.0)
+
+    @property
+    def pocket_mode(self) -> Literal["disabled", "residues", "ligand", "center", "index", "auto"]:
+        """Reports how this run's binding pocket is chosen.
+
+        Recorded in the manifest so a reader can tell a geometry-driven
+        pocket from one the user supplied -- the two support very different
+        claims about how the site was found.
+        """
+
+        if not self.use_pocket_data:
+            return "disabled"
+        if self.pocket_residues:
+            return "residues"
+        if self.pocket_ligand:
+            return "ligand"
+        if self.pocket_center is not None:
+            return "center"
+        if self.pocket_index is not None:
+            return "index"
+        return "auto"
+
+    @model_validator(mode="after")
+    def _validate_single_pocket_source(self) -> "PipelineOptions":
+        """Rejects more than one pocket source at a time.
+
+        Silently preferring one source over another would let a run report a
+        pocket the user did not ask for, so an ambiguous request fails here.
+        """
+
+        chosen = [
+            name
+            for name, value in (
+                ("pocket_residues", self.pocket_residues),
+                ("pocket_ligand", self.pocket_ligand),
+                ("pocket_center", self.pocket_center),
+                ("pocket_index", self.pocket_index),
+            )
+            if value is not None and value != ""
+        ]
+        if len(chosen) > 1:
+            raise ValueError(
+                "Give only one pocket source; received " + " and ".join(sorted(chosen))
+            )
+        if chosen and not self.use_pocket_data:
+            raise ValueError(
+                f"{chosen[0]} was given but pocket use is disabled; drop one of the two"
+            )
+        return self
 
     @field_validator("protein_sequence")
     @classmethod
@@ -304,18 +374,32 @@ class BestStructureRecord(BaseModel):
 
 
 class MoleculeRecord(BaseModel):
-    """Computed features and predicted activity for a candidate molecule."""
+    """Computed features and predicted activity for a candidate molecule.
+
+    Columns carrying a `Boltz2_` prefix are outputs of the Boltz-2 predictor,
+    not measurements: naming the model in the column keeps a predicted value
+    from being read as an experimental one, and leaves room for a second
+    evaluator's columns to sit beside them without ambiguity. The unprefixed
+    columns are deterministic RDKit descriptors of the molecule itself, which
+    depend on no model.
+
+    `Boltz2_Binding_Probability` (a binder/non-binder classifier head) and
+    `Boltz2_Predicted_Affinity_pIC50` (a regression head) are independent
+    model outputs. `Boltz2_Predicted_Affinity_uM` is not a third output: it
+    is the algebraic transform 10^-pIC50 of the regression head, expressed in
+    micromolar, and is uncalibrated against experimental data.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     SMILES: SmilesString
-    pTM: Probability
-    ipTM: Probability
-    Confidence: Probability
-    pLDDT: Probability
-    Affinity_Prob: Probability
-    pIC50: float
-    IC50_uM: NonNegativeFloat
+    Boltz2_pTM: Probability
+    Boltz2_ipTM: Probability
+    Boltz2_Confidence: Probability
+    Boltz2_Complex_pLDDT: Probability
+    Boltz2_Binding_Probability: Probability
+    Boltz2_Predicted_Affinity_pIC50: float
+    Boltz2_Predicted_Affinity_uM: NonNegativeFloat
     MolWt: Annotated[float, Field(gt=0.0)]
     LogP: float
     QED: Probability
@@ -327,13 +411,48 @@ class MoleculeRecord(BaseModel):
 
 
 class ScoredMoleculeRecord(MoleculeRecord):
-    """Final scored row produced before novelty enrichment."""
+    """Final scored row produced before novelty enrichment.
+
+    `Adj_Binding_Probability` is `Boltz2_Binding_Probability` after the
+    configured cutoff is applied; it is a reward term, not a prediction of
+    its own.
+    """
 
     MaxSim: Probability
-    adj_affinity: Probability
+    Adj_Binding_Probability: Probability
     synth_factor: Probability
     score: NonNegativeFloat
     Candidate_ID: str | None = None
+
+
+class ReferenceBaselineRow(MoleculeRecord):
+    """A reference inhibitor scored through the candidate scoring path.
+
+    Emitted to its own report so published candidate tables can be read
+    against a baseline computed with the identical predictor, pocket
+    constraints, and composite score, rather than against values quoted
+    from the literature under different assumptions.
+
+    `MaxSim_To_Other_References` is deliberately leave-one-out: a reference
+    compared against the full seed set would always score 1.0 against
+    itself, which is not the quantity a generated molecule is measured on.
+
+    The gate columns record whether this run's thresholds would have
+    admitted an established inhibitor, which is the direct check on whether
+    those thresholds are set at a defensible level.
+    """
+
+    Reference_Name: str = Field(min_length=1)
+    Role: Literal["reference"] = "reference"
+    MaxSim_To_Other_References: Probability
+    Adj_Binding_Probability: Probability
+    synth_factor: Probability
+    score: NonNegativeFloat
+    Passes_Affinity_Gate: bool
+    Passes_SAS_Gate: bool
+    Passes_ipTM_Gate: bool
+    Passes_pLDDT_Gate: bool
+    Passes_All_Gates: bool
 
 
 PubChemClassification = Literal[
@@ -366,7 +485,35 @@ class PatentReportRow(BaseModel):
 
 
 class UnifiedReportRow(ScoredMoleculeRecord):
-    """Complete validated row written to the final unified CSV report."""
+    """Complete validated row written to the final unified CSV report.
+
+    The scaffold columns answer a different question from the PubChem ones:
+    PubChem says whether this exact molecule is already known, while
+    `Scaffold_Is_Novel` says whether its core differs from every core the
+    model was shown. A candidate can be absent from PubChem while reusing a
+    seed scaffold outright. They default to `None` because scaffold analysis
+    is best-effort and must not fail a completed run.
+    """
+
+    Murcko_Scaffold: str | None = None
+    Generic_Scaffold: str | None = None
+    Scaffold_Is_Novel: bool | None = None
+    Generic_Scaffold_Is_Novel: bool | None = None
+    Max_Scaffold_Sim_To_Seeds: Probability | None = None
+
+    # Holdout columns. These come from evaluators that had no influence on
+    # generation, so unlike every other score here they are not something the
+    # pipeline optimized toward. They are `None` when the corresponding
+    # evaluator was unavailable or could not handle a given pose, which is
+    # reported rather than filled in.
+    PoseBusters_Pass: bool | None = None
+    PoseBusters_Checks_Passed: NonNegativeInt | None = None
+    PoseBusters_Checks_Total: NonNegativeInt | None = None
+    PoseBusters_Failed_Checks: str | None = None
+    PoseBusters_Bond_Orders_Assigned: bool | None = None
+    Vina_Score_kcal_per_mol: float | None = None
+    Vina_Minimized_kcal_per_mol: float | None = None
+    Vina_Minimization_Gain: float | None = None
 
     PubChem_CID: int | Literal["N/A"]
     Identity_Patents: NonNegativeInt

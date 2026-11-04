@@ -15,10 +15,16 @@ def get_cached_http_client() -> httpx.AsyncClient:
 
 
 @lru_cache(maxsize=2)
-def get_cached_groq_client(api_key: str) -> Groq:
-    """Builds and caches a Groq client keyed by API key."""
+def get_cached_groq_client(api_key: str, max_retries: int = 6) -> Groq:
+    """Builds and caches a Groq client keyed by API key.
 
-    return Groq(api_key=api_key)
+    `max_retries` is raised above the SDK default because rate-limit
+    windows are measured in minutes: a long run meters output tokens per
+    minute, so a 429 has to be waited out rather than abandoned. The SDK
+    honours the provider's `retry-after` header on each attempt.
+    """
+
+    return Groq(api_key=api_key, max_retries=max_retries)
 
 
 async def close_cached_clients() -> None:

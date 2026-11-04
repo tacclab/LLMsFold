@@ -5,6 +5,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from time import perf_counter
+from typing import Any
 
 import httpx
 import pandas as pd
@@ -17,6 +18,7 @@ from src.clients import get_cached_http_client
 from src.core.config import GeneratorSettings, get_generator_settings
 from src.core.logging import get_logger
 from src.core.messages import (
+    boltz_request_rejected,
     boltz_structure_missing,
     boltz_task_timeout,
     invalid_boltz_response,
@@ -73,14 +75,15 @@ def _parse_retry_after(value: str | None) -> float | None:
     return max((retry_at - datetime.now(timezone.utc)).total_seconds(), 0.0)
 
 
-
-
 class BoltzResult:
     """Validated Boltz prediction plus optional docked structure payload."""
 
-    def __init__(self, prediction: BoltzPrediction, best_structure: BestStructureRecord | None = None) -> None:
+    def __init__(
+        self, prediction: BoltzPrediction, best_structure: BestStructureRecord | None = None
+    ) -> None:
         self.prediction = prediction
         self.best_structure = best_structure
+
 
 class BoltzClient:
     """Async wrapper around NVIDIA Boltz prediction API."""
@@ -103,6 +106,21 @@ class BoltzClient:
         self.status_url = "https://api.nvcf.nvidia.com/v2/nvcf/pexec/status/{task_id}"
         self._settings = settings or get_generator_settings()
         self._client = http_client or get_cached_http_client()
+        # Observed provenance for the served model. The endpoint is not
+        # version-pinned, so a silent upstream model update would change every
+        # number in a report with nothing in the manifest to show it. Whatever
+        # the API discloses is captured here; when it discloses nothing, the
+        # manifest records that absence explicitly rather than leaving the
+        # reader to assume the model was fixed.
+        self.provenance: dict[str, Any] = {
+            "endpoint": self.public_url,
+            "version_pinned": False,
+            "reported_model_version": None,
+            "observed_response_fields": [],
+            "observed_version_headers": {},
+            "first_response_at": None,
+            "last_response_at": None,
+        }
 
     def _get_retry_delay(self, retry_state: RetryCallState) -> float:
         """Computes retry delay for Boltz 429 responses."""
@@ -274,10 +292,18 @@ class BoltzClient:
         elif response.status_code == 200:
             raw_data = response.json()
         else:
+            # Without this the status and body are discarded and the caller
+            # reports only "no prediction", so an authorisation failure or a
+            # malformed payload is indistinguishable from a model that simply
+            # declined to answer -- and a whole run can fail without the
+            # reason ever reaching the log.
+            logger.error(boltz_request_rejected(smiles, response))
             return None
 
         if raw_data is None:
             return None
+
+        self._record_provenance(raw_data, response)
 
         try:
             prediction = BoltzPrediction.model_validate(raw_data)
@@ -287,6 +313,32 @@ class BoltzClient:
 
         best_structure = self._extract_best_structure(smiles, prediction)
         return BoltzResult(prediction=prediction, best_structure=best_structure)
+
+    def _record_provenance(self, raw_data: dict[str, object], response: httpx.Response) -> None:
+        """Captures whatever the endpoint discloses about the served model.
+
+        `BoltzPrediction` ignores unknown fields, so any version metadata the
+        API returns would otherwise be discarded before anything could record
+        it. This reads the raw payload and headers instead, and stays silent
+        about what it cannot observe.
+        """
+
+        now = datetime.now(timezone.utc).isoformat()
+        if self.provenance["first_response_at"] is None:
+            self.provenance["first_response_at"] = now
+            self.provenance["observed_response_fields"] = sorted(raw_data)
+        self.provenance["last_response_at"] = now
+
+        if self.provenance["reported_model_version"] is None:
+            for key, value in raw_data.items():
+                if "version" in key.lower() and isinstance(value, (str, int, float)):
+                    self.provenance["reported_model_version"] = str(value)
+                    break
+
+        for header, value in response.headers.items():
+            lowered = header.lower()
+            if "version" in lowered or lowered in {"nvcf-function-id", "nvcf-asset-id"}:
+                self.provenance["observed_version_headers"][header] = value
 
     @staticmethod
     def _best_structure_index(prediction: BoltzPrediction) -> int:
@@ -394,8 +446,9 @@ class BoltzClient:
 
                 # `affinity_probability_binary` (binder/non-binder classifier output) and
                 # `affinity_pic50` (regression output) are two independent Boltz-2 model
-                # heads, not one derived from the other. `IC50_uM` below *is* derived,
+                # heads, not one derived from the other. `ic50_um` below *is* derived,
                 # but only from pIC50: IC50[M] = 10^-pIC50, converted here to micromolar.
+                # It is reported as `Boltz2_Predicted_Affinity_uM` and is uncalibrated.
                 ligand_affinity = (
                     next(iter(prediction.affinities.values()))
                     if prediction.affinities
@@ -410,8 +463,8 @@ class BoltzClient:
                 ic50_um = pow(10, -pic50) * 1e6
 
                 logger.info(
-                    "Boltz result %s/%s for %s in %.2fs: affinity=%.3f pIC50=%.3f "
-                    "pTM=%.3f ipTM=%.3f pLDDT=%.3f",
+                    "Boltz result %s/%s for %s in %.2fs: binding_probability=%.3f "
+                    "predicted_pIC50=%.3f pTM=%.3f ipTM=%.3f pLDDT=%.3f",
                     index,
                     len(smiles_list),
                     smiles,
@@ -425,13 +478,13 @@ class BoltzClient:
 
                 record = MoleculeRecord(
                     SMILES=smiles,
-                    pTM=ptm,
-                    ipTM=iptm,
-                    Confidence=confidence,
-                    pLDDT=plddt,
-                    Affinity_Prob=affinity_probability,
-                    pIC50=pic50,
-                    IC50_uM=ic50_um,
+                    Boltz2_pTM=ptm,
+                    Boltz2_ipTM=iptm,
+                    Boltz2_Confidence=confidence,
+                    Boltz2_Complex_pLDDT=plddt,
+                    Boltz2_Binding_Probability=affinity_probability,
+                    Boltz2_Predicted_Affinity_pIC50=pic50,
+                    Boltz2_Predicted_Affinity_uM=ic50_um,
                     MolWt=round(Descriptors.MolWt(mol), 2),
                     LogP=round(Descriptors.MolLogP(mol), 2),
                     QED=QED.qed(mol),
@@ -451,4 +504,6 @@ class BoltzClient:
             len(records),
             len(smiles_list),
         )
-        return pd.DataFrame.from_records([record.model_dump() for record in records]), best_structures
+        return pd.DataFrame.from_records(
+            [record.model_dump() for record in records]
+        ), best_structures

@@ -37,6 +37,20 @@ def _build_already_proposed_clause(already_proposed: str) -> str:
     return f"ALREADY PROPOSED, do not repeat these exact structures verbatim: {already_proposed}. "
 
 
+def _build_extra_constraints_clause(extra_constraints: str | None) -> str:
+    """Builds the clause carrying a user-stated exclusion.
+
+    The contrastive AVOID pools are derived from scoring, so they can only
+    describe failures the pipeline has already observed. A constraint known
+    in advance -- a chemotype to stay away from, say -- has no other route
+    into the prompt.
+    """
+
+    if not extra_constraints:
+        return ""
+    return f"ADDITIONAL CONSTRAINTS: {extra_constraints.strip().rstrip('.')}. "
+
+
 def build_user_prompt(
     use_pocket_data: bool,
     pocket_residues: str | None,
@@ -45,21 +59,24 @@ def build_user_prompt(
     avoid_hard_to_synthesize: str = "",
     avoid_weak_binders: str = "",
     already_proposed: str = "",
+    extra_constraints: str | None = None,
 ) -> str:
     """Builds the user prompt variant based on whether pocket data is enabled."""
 
     avoid_clause = _build_avoid_clause(avoid_hard_to_synthesize, avoid_weak_binders)
     already_proposed_clause = _build_already_proposed_clause(already_proposed)
+    extra_clause = _build_extra_constraints_clause(extra_constraints)
 
     if use_pocket_data:
         return (
             f"Design {max_samples} drug-like molecules for a binding pocket containing: {pocket_residues}. "
             f"Strategy: Create fragments for H-bonds with these residues while inspired by: {leads_text}. "
-            f"{avoid_clause}{already_proposed_clause}"
+            f"{extra_clause}{avoid_clause}{already_proposed_clause}"
             "Return ONLY the Python list."
         )
     return (
         f"Generate {max_samples} bioisosteres or analogs of: {leads_text}. "
-        f"Improve drug-likeness and novelty. {avoid_clause}{already_proposed_clause}"
+        f"Improve drug-likeness and novelty. {extra_clause}{avoid_clause}"
+        f"{already_proposed_clause}"
         "Return ONLY the Python list."
     )
