@@ -17,6 +17,17 @@ dependencies = [
     "tqdm>=4.67.1",
 ]
 
+[project.optional-dependencies]
+# Independent (holdout) evaluation. Kept optional because these judge
+# finished candidates and are not needed to generate them, and because Vina
+# additionally requires a receptor the user prepares themselves.
+# Install with: uv sync --extra holdout
+holdout = [
+    "posebusters>=0.3.1",
+    "vina>=1.2.5",
+    "meeko>=0.5.0",
+]
+
 [dependency-groups]
 dev = [
     "mypy>=1.18.2",

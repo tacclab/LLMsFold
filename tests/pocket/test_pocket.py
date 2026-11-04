@@ -239,8 +239,20 @@ def test_select_pocket_excludes_disqualified_pocket_regardless_of_volume() -> No
     qualifying = DummyPocket(center=(1.0, 1.0, 1.0), spans=(9.0, 9.0, 9.0))
     pockets = [oversized_but_shallow, qualifying]
     pocket_rows = [
-        {"pocket_id": 1.0, "center_x": 0.0, "center_y": 0.0, "center_z": 0.0, "volume_approx": 2500.0},
-        {"pocket_id": 2.0, "center_x": 1.0, "center_y": 1.0, "center_z": 1.0, "volume_approx": 729.0},
+        {
+            "pocket_id": 1.0,
+            "center_x": 0.0,
+            "center_y": 0.0,
+            "center_z": 0.0,
+            "volume_approx": 2500.0,
+        },
+        {
+            "pocket_id": 2.0,
+            "center_x": 1.0,
+            "center_y": 1.0,
+            "center_z": 1.0,
+            "volume_approx": 729.0,
+        },
     ]
 
     selected = pocket._select_pocket(pockets, pocket_rows, pocket_index=-1)
@@ -259,8 +271,20 @@ def test_select_pocket_prefers_smallest_among_multiple_qualifying() -> None:
     larger_qualifying = DummyPocket(center=(1.0, 1.0, 1.0), spans=(10.0, 10.0, 10.0))
     pockets = [larger_qualifying, smaller_qualifying]
     pocket_rows = [
-        {"pocket_id": 1.0, "center_x": 1.0, "center_y": 1.0, "center_z": 1.0, "volume_approx": 1000.0},
-        {"pocket_id": 2.0, "center_x": 0.0, "center_y": 0.0, "center_z": 0.0, "volume_approx": 729.0},
+        {
+            "pocket_id": 1.0,
+            "center_x": 1.0,
+            "center_y": 1.0,
+            "center_z": 1.0,
+            "volume_approx": 1000.0,
+        },
+        {
+            "pocket_id": 2.0,
+            "center_x": 0.0,
+            "center_y": 0.0,
+            "center_z": 0.0,
+            "volume_approx": 729.0,
+        },
     ]
 
     selected = pocket._select_pocket(pockets, pocket_rows, pocket_index=-1)
@@ -276,7 +300,13 @@ def test_select_pocket_falls_back_when_none_qualify() -> None:
     pockets = [small_a, small_b]
     pocket_rows = [
         {"pocket_id": 1.0, "center_x": 0.0, "center_y": 0.0, "center_z": 0.0, "volume_approx": 1.0},
-        {"pocket_id": 2.0, "center_x": 1.0, "center_y": 1.0, "center_z": 1.0, "volume_approx": 64.0},
+        {
+            "pocket_id": 2.0,
+            "center_x": 1.0,
+            "center_y": 1.0,
+            "center_z": 1.0,
+            "volume_approx": 64.0,
+        },
     ]
 
     selected = pocket._select_pocket(pockets, pocket_rows, pocket_index=-1)
@@ -287,7 +317,7 @@ def test_select_pocket_falls_back_when_none_qualify() -> None:
 @pytest.mark.parametrize(
     ("size", "expected"),
     [
-        (2.0, 7.0),    # +5 margin, no cap
+        (2.0, 7.0),  # +5 margin, no cap
         (15.0, 20.0),  # +5 margin, no cap
         (25.0, 30.0),  # +5 margin would exceed max -> capped
         (50.0, 30.0),  # already over max before margin -> capped
@@ -364,7 +394,9 @@ def test_get_binding_pockets_and_residues_no_pockets(monkeypatch: pytest.MonkeyP
     )
     monkeypatch.setitem(__import__("sys").modules, "deepchem", fake_deepchem)
 
-    center, residues, box_dims = pocket.get_binding_pockets_and_residues("protein.pdb", backend="deepchem")
+    center, residues, box_dims = pocket.get_binding_pockets_and_residues(
+        "protein.pdb", backend="deepchem"
+    )
 
     assert center == "No pockets found"
     assert residues == "Unknown"
@@ -410,8 +442,17 @@ def test_get_binding_pockets_and_residues_with_mocked_mol(
     pockets_csv = output_dir / "all_pockets.csv"
     assert pockets_csv.exists()
     import pandas as pd
+
     df = pd.read_csv(pockets_csv)
-    assert {"center_x", "center_y", "center_z", "size_x", "size_y", "size_z", "volume_approx"}.issubset(df.columns)
+    assert {
+        "center_x",
+        "center_y",
+        "center_z",
+        "size_x",
+        "size_y",
+        "size_z",
+        "volume_approx",
+    }.issubset(df.columns)
     assert box_dims == {
         "center_x": 1.0,
         "center_y": 2.0,

@@ -11,22 +11,79 @@ from src.core.exceptions import SequenceExtractionError
 
 
 @pytest.mark.parametrize(
-    ("adj_affinity", "max_sim", "synth_factor", "expected"),
+    ("adj_binding_probability", "max_sim", "synth_factor", "expected"),
     [
-        (0.8, 0.95, 1.0, 0.4),
-        (0.8, 0.9, 1.0, 0.8),
+        # At and below the 0.6 threshold the similarity term is inert.
+        (0.8, 0.5, 1.0, 0.8),
+        (0.8, 0.6, 1.0, 0.8),
+        # Above it the penalty ramps linearly rather than switching on.
+        (0.8, 0.7, 1.0, 0.7),
+        (0.8, 0.8, 1.0, 0.6),
+        (0.8, 0.9, 1.0, 0.5),
+        # Full penalty (half the binding probability) only at identity.
+        (0.8, 1.0, 1.0, 0.4),
+        # Zero binding probability cannot be rescued by novelty.
         (0.0, 0.99, 1.0, 0.0),
+        # Synthesizability scales the whole novelty-adjusted term.
         (0.8, 0.5, 0.5, 0.4),
-        (0.8, 0.95, 0.5, 0.2),
+        (0.8, 0.95, 0.5, 0.225),
     ],
 )
 def test_calculate_heuristic_score(
-    adj_affinity: float, max_sim: float, synth_factor: float, expected: float
+    adj_binding_probability: float, max_sim: float, synth_factor: float, expected: float
 ) -> None:
     """Heuristic score penalizes over-similar compounds and scales by synthesizability."""
 
-    row = pd.Series({"adj_affinity": adj_affinity, "MaxSim": max_sim, "synth_factor": synth_factor})
+    row = pd.Series(
+        {
+            "Adj_Binding_Probability": adj_binding_probability,
+            "MaxSim": max_sim,
+            "synth_factor": synth_factor,
+        }
+    )
     assert chemistry.calculate_heuristic_score(row) == pytest.approx(expected)
+
+
+def test_calculate_heuristic_score_penalizes_below_the_old_cliff() -> None:
+    """A near-duplicate just under the former 0.9 cutoff is no longer free.
+
+    Regression test for the step-function penalty: at similarity 0.89 the
+    previous implementation applied no penalty at all, so a run could fill
+    its output with near-duplicates that each sat just under the line.
+    """
+
+    row = pd.Series({"Adj_Binding_Probability": 0.8, "MaxSim": 0.89, "synth_factor": 1.0})
+
+    assert chemistry.calculate_heuristic_score(row) == pytest.approx(0.51)
+
+
+@pytest.mark.parametrize(
+    ("threshold", "fraction", "expected"),
+    [
+        # A stricter threshold penalizes the same molecule harder (0.6 at
+        # the 0.6 default, versus 0.5 here).
+        (0.2, 0.5, 0.5),
+        # A stronger maximum penalty does too.
+        (0.6, 1.0, 0.4),
+        # Disabling the term entirely leaves the binding probability alone.
+        (1.0, 0.5, 0.8),
+        (0.6, 0.0, 0.8),
+    ],
+)
+def test_calculate_heuristic_score_honours_configured_penalty(
+    threshold: float, fraction: float, expected: float
+) -> None:
+    """Both penalty parameters are tunable per run for ablation sweeps."""
+
+    row = pd.Series({"Adj_Binding_Probability": 0.8, "MaxSim": 0.8, "synth_factor": 1.0})
+
+    score = chemistry.calculate_heuristic_score(
+        row,
+        similarity_penalty_threshold=threshold,
+        similarity_penalty_fraction=fraction,
+    )
+
+    assert score == pytest.approx(expected)
 
 
 @pytest.mark.parametrize(

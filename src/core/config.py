@@ -8,6 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from src.core.constants import (
     ADJ_AFFINITY_THRESHOLD,
+    ALREADY_PROPOSED_WINDOW,
     DEFAULT_BOLTZ_DIFFUSION_SAMPLES,
     DEFAULT_BOLTZ_MAX_WAIT_SECONDS,
     DEFAULT_BOLTZ_POLL_HEADER_SECONDS,
@@ -22,6 +23,9 @@ from src.core.constants import (
     DEFAULT_BOLTZ_WITHOUT_POTENTIALS,
     DEFAULT_FEW_SHOT_CSV,
     DEFAULT_IPTM_THRESHOLD,
+    DEFAULT_LEAD_DIVERSITY_MAX_SIM,
+    DEFAULT_LLM_MAX_RETRIES,
+    DEFAULT_LLM_MAX_TOKENS,
     DEFAULT_LLM_MODEL,
     DEFAULT_LLM_TEMPERATURE,
     DEFAULT_LOG_LEVEL,
@@ -30,10 +34,16 @@ from src.core.constants import (
     DEFAULT_OUTPUT_DIR,
     DEFAULT_PDB_FILE,
     DEFAULT_PLDDT_THRESHOLD,
+    DEFAULT_POCKET_CONTACT_DISTANCE,
     DEFAULT_PUBCHEM_LISTKEY_ATTEMPTS,
+    DEFAULT_PUBCHEM_MAX_CONCURRENCY,
+    DEFAULT_PUBCHEM_MIN_REQUEST_INTERVAL_SECONDS,
     DEFAULT_PUBCHEM_POLL_INTERVAL_SECONDS,
     DEFAULT_PUBCHEM_TIMEOUT_SECONDS,
     SAS_SCORE_MAX,
+    SEED_SMILES_LIMIT,
+    SIMILARITY_PENALTY_FRACTION,
+    SIMILARITY_PENALTY_THRESHOLD,
 )
 
 
@@ -54,6 +64,16 @@ class GeneratorSettings(BaseSettings):
         ge=0.0,
         le=2.0,
     )
+    llm_max_tokens: int = Field(
+        default=DEFAULT_LLM_MAX_TOKENS,
+        alias="LLM_MAX_TOKENS",
+        ge=1,
+    )
+    llm_max_retries: int = Field(
+        default=DEFAULT_LLM_MAX_RETRIES,
+        alias="LLM_MAX_RETRIES",
+        ge=0,
+    )
     adj_affinity_threshold: float = Field(
         default=ADJ_AFFINITY_THRESHOLD,
         alias="ADJ_AFFINITY_THRESHOLD",
@@ -61,6 +81,38 @@ class GeneratorSettings(BaseSettings):
         le=1.0,
     )
     sas_score_max: float = Field(default=SAS_SCORE_MAX, alias="SAS_SCORE_MAX", ge=1.0, le=10.0)
+    similarity_penalty_threshold: float = Field(
+        default=SIMILARITY_PENALTY_THRESHOLD,
+        alias="SIMILARITY_PENALTY_THRESHOLD",
+        ge=0.0,
+        le=1.0,
+    )
+    similarity_penalty_fraction: float = Field(
+        default=SIMILARITY_PENALTY_FRACTION,
+        alias="SIMILARITY_PENALTY_FRACTION",
+        ge=0.0,
+        le=1.0,
+    )
+    seed_smiles_limit: int = Field(
+        default=SEED_SMILES_LIMIT,
+        alias="SEED_SMILES_LIMIT",
+        ge=1,
+    )
+    # Free-text constraint appended to every generation prompt, for
+    # exclusions the contrastive negative pools cannot express because they
+    # are derived from scoring rather than stated up front.
+    extra_prompt_constraints: str | None = Field(default=None, alias="EXTRA_PROMPT_CONSTRAINTS")
+    already_proposed_window: int = Field(
+        default=ALREADY_PROPOSED_WINDOW,
+        alias="ALREADY_PROPOSED_WINDOW",
+        ge=0,
+    )
+    lead_diversity_max_sim: float = Field(
+        default=DEFAULT_LEAD_DIVERSITY_MAX_SIM,
+        alias="LEAD_DIVERSITY_MAX_SIM",
+        ge=0.0,
+        le=1.0,
+    )
     iptm_threshold: float = Field(
         default=DEFAULT_IPTM_THRESHOLD,
         alias="IPTM_THRESHOLD",
@@ -74,6 +126,11 @@ class GeneratorSettings(BaseSettings):
         le=1.0,
     )
     random_seed: int | None = Field(default=None, alias="RANDOM_SEED")
+    # Prepared receptor for Vina rescoring. Left unset by default: preparing a
+    # receptor PDBQT involves protonation and cofactor choices that belong to
+    # whoever set up the target, not to this pipeline.
+    vina_receptor_pdbqt: Path | None = Field(default=None, alias="VINA_RECEPTOR_PDBQT")
+    enable_holdout_evaluation: bool = Field(default=True, alias="ENABLE_HOLDOUT_EVALUATION")
     best_structure_affinity_threshold: float | None = Field(
         default=None,
         alias="BEST_STRUCTURE_AFFINITY_THRESHOLD",
@@ -155,6 +212,16 @@ class GeneratorSettings(BaseSettings):
         alias="PUBCHEM_POLL_INTERVAL_SECONDS",
         gt=0.0,
     )
+    pubchem_max_concurrency: int = Field(
+        default=DEFAULT_PUBCHEM_MAX_CONCURRENCY,
+        alias="PUBCHEM_MAX_CONCURRENCY",
+        ge=1,
+    )
+    pubchem_min_request_interval_seconds: float = Field(
+        default=DEFAULT_PUBCHEM_MIN_REQUEST_INTERVAL_SECONDS,
+        alias="PUBCHEM_MIN_REQUEST_INTERVAL_SECONDS",
+        ge=0.0,
+    )
 
 
 class AppSettings(GeneratorSettings):
@@ -168,6 +235,17 @@ class AppSettings(GeneratorSettings):
     max_iterations: int = Field(default=DEFAULT_MAX_ITERATIONS, alias="MAX_ITERATIONS", ge=1)
     max_samples: int = Field(default=DEFAULT_MAX_SAMPLES, alias="MAX_SAMPLES", ge=1)
     log_level: str = Field(default=DEFAULT_LOG_LEVEL, alias="LOG_LEVEL")
+    # Optional user-specified binding pocket. Unset means the pocket is found
+    # by geometry; any one of these pins it instead.
+    pocket_residues: str | None = Field(default=None, alias="POCKET_RESIDUES")
+    pocket_ligand: str | None = Field(default=None, alias="POCKET_LIGAND")
+    pocket_center: str | None = Field(default=None, alias="POCKET_CENTER")
+    pocket_index: int | None = Field(default=None, alias="POCKET_INDEX", ge=0)
+    pocket_contact_distance: float = Field(
+        default=DEFAULT_POCKET_CONTACT_DISTANCE,
+        alias="POCKET_CONTACT_DISTANCE",
+        gt=0.0,
+    )
 
 
 @lru_cache(maxsize=1)

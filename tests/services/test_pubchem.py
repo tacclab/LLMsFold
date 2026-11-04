@@ -5,6 +5,7 @@ import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
+import pytest
 
 from src.schemas import PatentCheckResult
 from src.services.pubchem import PubChemService
@@ -172,3 +173,61 @@ def test_check_patents_preserves_identity_when_substructure_polling_times_out(
     assert result.identity_patents == 2
     assert result.substructure_patents == 0
     assert "did not complete after 3 polling attempts" in caplog.text
+
+
+# --- Request rate limiting --------------------------------------------------
+
+
+def test_rate_gate_caps_concurrency_and_spacing() -> None:
+    """Requests stay inside PubChem's published five-per-second budget.
+
+    The pipeline fans novelty checks out across every candidate at once, so
+    without a gate the request rate on a large run is bounded only by the
+    number of candidates. Both limits are checked: the semaphore bounds how
+    many requests are in flight, and the interval bounds how closely their
+    starts are spaced.
+    """
+
+    from src.services.pubchem import _RateGate
+
+    gate = _RateGate(max_concurrency=3, min_interval_seconds=0.02)
+    starts: list[float] = []
+    in_flight = 0
+    peak = 0
+
+    async def one() -> None:
+        nonlocal in_flight, peak
+        async with gate.hold():
+            starts.append(asyncio.get_running_loop().time())
+            in_flight += 1
+            peak = max(peak, in_flight)
+            await asyncio.sleep(0.01)
+            in_flight -= 1
+
+    async def run_all() -> None:
+        await asyncio.gather(*[one() for _ in range(12)])
+
+    asyncio.run(run_all())
+
+    assert peak <= 3
+    gaps = [later - earlier for earlier, later in zip(starts, starts[1:], strict=False)]
+    assert min(gaps) >= 0.02 - 1e-6
+
+
+def test_rate_gate_releases_its_slot_when_a_request_fails() -> None:
+    """A failing request must not permanently consume a concurrency slot."""
+
+    from src.services.pubchem import _RateGate
+
+    gate = _RateGate(max_concurrency=1, min_interval_seconds=0.0)
+
+    async def run_all() -> None:
+        for _ in range(3):
+            with pytest.raises(RuntimeError):
+                async with gate.hold():
+                    raise RuntimeError("request failed")
+        # The gate is still usable after three failures.
+        async with gate.hold():
+            pass
+
+    asyncio.run(run_all())

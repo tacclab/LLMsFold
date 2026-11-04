@@ -30,6 +30,13 @@ def fake_settings() -> SimpleNamespace:
         random_seed=None,
         nvidia_api_key=secret("n-key"),
         groq_api_key=secret("g-key"),
+        pocket_residues=None,
+        pocket_ligand=None,
+        pocket_center=None,
+        pocket_index=None,
+        pocket_contact_distance=8.0,
+        pubchem_max_concurrency=4,
+        pubchem_min_request_interval_seconds=0.25,
     )
 
 
@@ -37,7 +44,18 @@ def test_build_parser_defaults_and_no_pocket_flag() -> None:
     """Parser should use provided defaults and support disabling pocket mode."""
 
     parser = main._build_parser(
-        {"pdb": "p.pdb", "csv": "few.csv", "out": "out", "iters": 4, "samples": 6}
+        {
+            "pdb": "p.pdb",
+            "csv": "few.csv",
+            "out": "out",
+            "iters": 4,
+            "samples": 6,
+            "pocket_residues": None,
+            "pocket_ligand": None,
+            "pocket_center": None,
+            "pocket_index": None,
+            "pocket_contact_distance": 8.0,
+        }
     )
 
     defaults = parser.parse_args([])
@@ -47,9 +65,13 @@ def test_build_parser_defaults_and_no_pocket_flag() -> None:
     assert defaults.iters == 4
     assert defaults.samples == 6
     assert defaults.use_pocket is True
+    assert defaults.score_references is False
 
     no_pocket = parser.parse_args(["--no-pocket"])
     assert no_pocket.use_pocket is False
+
+    with_references = parser.parse_args(["--score-references"])
+    assert with_references.score_references is True
 
 
 def test_build_launch_banner_includes_authors_and_group_links() -> None:
@@ -72,7 +94,18 @@ def test_main_returns_early_when_pdb_missing(
 
     parser = MagicMock()
     parser.parse_args.return_value = argparse.Namespace(
-        pdb="missing.pdb", csv="few.csv", out="out", iters=1, samples=1, use_pocket=True
+        pdb="missing.pdb",
+        csv="few.csv",
+        out="out",
+        iters=1,
+        samples=1,
+        use_pocket=True,
+        score_references=False,
+        pocket_residues=None,
+        pocket_ligand=None,
+        pocket_center=None,
+        pocket_index=None,
+        pocket_contact_distance=8.0,
     )
 
     monkeypatch.setattr(main, "get_settings", lambda: fake_settings)
@@ -102,6 +135,12 @@ def test_main_happy_path_runs_generator_and_closes_clients(
         iters=2,
         samples=3,
         use_pocket=False,
+        score_references=True,
+        pocket_residues=None,
+        pocket_ligand=None,
+        pocket_center=None,
+        pocket_index=None,
+        pocket_contact_distance=8.0,
     )
 
     generator_instance = MagicMock()
@@ -128,6 +167,7 @@ def test_main_happy_path_runs_generator_and_closes_clients(
     options = generator_instance.run.await_args.args[0]
     assert options.pdb_path == Path("protein.pdb")
     assert options.use_pocket_data is False
+    assert options.score_references is True
     assert options.target_chain_id == "A"
     close_mock.assert_awaited_once()
 
@@ -146,6 +186,12 @@ def test_main_closes_clients_on_generator_failure(
         iters=2,
         samples=3,
         use_pocket=True,
+        score_references=False,
+        pocket_residues=None,
+        pocket_ligand=None,
+        pocket_center=None,
+        pocket_index=None,
+        pocket_contact_distance=8.0,
     )
 
     generator_instance = MagicMock()
