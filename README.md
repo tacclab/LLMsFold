@@ -124,10 +124,25 @@ flowchart TD
 ```
 ## Key Features
 - Async end-to-end orchestration with reusable HTTP clients.
+- **Independent holdout evaluation.** PoseBusters pose validation and AutoDock
+  Vina rescoring run only after the generation loop has terminated and are
+  unreachable from inside it, so no holdout score can influence the molecules
+  it judges. Both come from different method families than the co-folding model.
+- **Reference inhibitor baselines.** Molecules of known activity are scored
+  through the identical path as generated candidates, giving the acceptance
+  thresholds something to calibrate against.
+- **Run provenance.** Every run writes `run_manifest.json` recording resolved
+  thresholds, SHA-256 input digests, code and package versions, pocket
+  selection and per-iteration outcomes.
+- **Binding site selection.** Give the site as residues, a bound ligand, or a
+  point, or let geometry-based detection choose. A site you name is never
+  silently replaced by a fallback.
+- **Scaffold diversity reporting.** Bemis-Murcko and generic frameworks,
+  novelty against the seed set, internal diversity and Shannon entropy.
 - Pocket-aware mode with residue-constrained Boltz requests.
-- Iterative LLM loop with context leads across rounds.
+- Iterative LLM loop with diversity-filtered leads across rounds.
 - RDKit filters (validity, Lipinski, PAINS/BRENK, SAS cutoff).
-- Built-in novelty and patent signal checks via PubChem APIs.
+- Literature-presence checks via PubChem APIs.
 
 ## Repository Layout
 ```text
@@ -139,9 +154,13 @@ LLMsFold/
 |  |- generator.py
 |  |- nvidia_client.py
 |  |- chemistry.py
-|  |- pocket.py
+|  |- pocket.py                    # detection + user-specified binding sites
 |  |- prompt.py
 |  |- schemas.py
+|  |- diversity.py                 # Bemis-Murcko scaffold analysis
+|  |- manifest.py                  # run provenance
+|  |- structures.py                # mmCIF -> protein/ligand splitting
+|  |- evaluators/                  # holdout evaluators: PoseBusters, Vina
 |  |- clients/factory.py
 |  |- services/pubchem.py
 |  `- core/{config,constants,logging}.py
@@ -184,15 +203,17 @@ Fill in API keys and adjust paths as needed.
 | `OUTPUT_DIR` | No | `results` | Output directory |
 | `MAX_ITERATIONS` | No | `3` | RL-style loop iterations |
 | `MAX_SAMPLES` | No | `5` | LLM proposals per iteration |
-| `LLM_MODEL` | No | `llama-3.3-70b-versatile` | Groq model name |
+| `LLM_MODEL` | No | `llama-3.3-70b-versatile` | Groq model name. **Set this explicitly: the shipped default has been decommissioned by Groq and now returns HTTP 404.** `qwen/qwen3.8-27b` is verified working. Avoid reasoning-tuned models that return an empty `content` field (e.g. `gpt-oss`), which yield no parseable SMILES |
 | `LLM_TEMPERATURE` | No | `0.8` | LLM temperature (`0.0` to `2.0`) |
+| `LLM_MAX_TOKENS` | No | `800` | Output token cap per completion. Without an explicit cap the provider reserves the full context window against the per-minute output budget and returns HTTP `429` |
+| `LLM_MAX_RETRIES` | No | `6` | Retry budget for rate-limited LLM completions |
 | `BEST_STRUCTURE_AFFINITY_THRESHOLD` | No | - | Save Boltz docked structures for candidates with `Boltz2_Binding_Probability` above this threshold (`0.0` to `1.0`) |
 | `IPTM_THRESHOLD` | No | `0.95` | Minimum Boltz `ipTM` required to keep a candidate (`0.0` to `1.0`) |
 | `PLDDT_THRESHOLD` | No | `0.9` | Minimum Boltz `pLDDT` required to keep a candidate (`0.0` to `1.0`) |
 | `SIMILARITY_PENALTY_THRESHOLD` | No | `0.6` | Tanimoto similarity at which the reward's novelty penalty starts ramping in (`0.0` to `1.0`) |
 | `SIMILARITY_PENALTY_FRACTION` | No | `0.5` | Largest share of the binding probability the novelty penalty can remove, reached at similarity 1.0 (`0.0` disables it) |
 | `ENABLE_HOLDOUT_EVALUATION` | No | `true` | Run independent evaluators on finished candidates after generation |
-| `VINA_RECEPTOR_PDBQT` | No | - | Prepared receptor PDBQT enabling Vina rescoring; without it Vina reports itself unavailable |
+| `VINA_RECEPTOR_PDBQT` | No | - | Optional pre-prepared receptor PDBQT. **Not required** - Vina builds a receptor from each predicted complex, so the pose is scored in the predictor's own coordinate frame rather than the crystal's. Vina reports itself unavailable only when `vina`, `meeko`, or `mk_prepare_receptor.py` is missing |
 | `POCKET_RESIDUES` | No | - | Use these residues as the pocket instead of detecting one (e.g. `A:203,A:207`) |
 | `POCKET_LIGAND` | No | - | Use the residues around this bound ligand as the pocket (e.g. `ATP` or `ATP:A:401`) |
 | `POCKET_CENTER` | No | - | Use the residues around this point as the pocket, as `x,y,z` |
@@ -200,9 +221,28 @@ Fill in API keys and adjust paths as needed.
 | `POCKET_CONTACT_DISTANCE` | No | `8.0` | Radius in Å used by `POCKET_LIGAND` and `POCKET_CENTER` |
 | `LEAD_DIVERSITY_MAX_SIM` | No | `0.7` | A candidate is fed back as a new prompt lead only if it is below this similarity to every existing lead (`0.0` to `1.0`) |
 | `RANDOM_SEED` | No | - | Seed applied to Python/NumPy RNG and passed to the Groq chat completion call for more reproducible runs |
+| `BOLTZ_DIFFUSION_SAMPLES` | No | `4` | Diffusion samples per Boltz prediction. Higher values cost proportionally more time per molecule |
+| `BOLTZ_RECYCLING_STEPS` | No | `3` | Boltz recycling iterations |
+| `BOLTZ_SAMPLING_STEPS` | No | `200` | Boltz diffusion sampling steps |
+| `BOLTZ_STEP_SCALE` | No | `1.2` | Boltz diffusion step scale; lower values give more diverse poses |
+| `BOLTZ_WITHOUT_POTENTIALS` | No | `true` | Skip Boltz's physical potentials during sampling |
+| `BOLTZ_REQUEST_TIMEOUT_SECONDS` | No | `400.0` | HTTP timeout for a single Boltz request |
+| `BOLTZ_MAX_WAIT_SECONDS` | No | `600` | Total budget for an asynchronous Boltz job before it is abandoned |
+| `BOLTZ_POLL_INTERVAL_SECONDS` | No | `5.0` | Delay between polls of a pending Boltz job |
+| `BOLTZ_POLL_HEADER_SECONDS` | No | `300` | Value sent in the Boltz long-poll wait header |
 | `BOLTZ_RETRY_ATTEMPTS` | No | `4` | Retry budget for Boltz HTTP `429` responses |
+| `PUBCHEM_TIMEOUT_SECONDS` | No | `10.0` | HTTP timeout for a single PubChem request |
+| `PUBCHEM_LISTKEY_ATTEMPTS` | No | `3` | Polls allowed for a PubChem asynchronous list key |
+| `PUBCHEM_POLL_INTERVAL_SECONDS` | No | `2.0` | Delay between PubChem list-key polls |
 | `BOLTZ_RETRY_MIN_WAIT_SECONDS` | No | `2.0` | Initial tenacity backoff for Boltz HTTP `429` responses |
 | `BOLTZ_RETRY_MAX_WAIT_SECONDS` | No | `30.0` | Maximum tenacity backoff for Boltz HTTP `429` responses |
+| `ADJ_AFFINITY_THRESHOLD` | No | `0.6` | Minimum penalty-adjusted binding probability required to keep a candidate (`0.0` to `1.0`). One of the four acceptance gates recorded in the run manifest |
+| `SAS_SCORE_MAX` | No | `6.0` | Maximum synthetic accessibility score allowed (`1.0` to `10.0`) |
+| `SEED_SMILES_LIMIT` | No | `5` | Number of rows read from `FEW_SHOT_CSV` as prompt seeds |
+| `ALREADY_PROPOSED_WINDOW` | No | `10` | How many previously proposed molecules are shown to the LLM as exclusions |
+| `EXTRA_PROMPT_CONSTRAINTS` | No | - | Free-text constraints appended to the generation prompt (e.g. a chemotype to avoid) |
+| `PUBCHEM_MAX_CONCURRENCY` | No | `4` | Concurrent PubChem requests. With the interval below, keeps the client inside PubChem's published 5 req/s policy |
+| `PUBCHEM_MIN_REQUEST_INTERVAL_SECONDS` | No | `0.25` | Minimum spacing between PubChem requests |
 | `LOG_LEVEL` | No | `INFO` | Logging level |
 
 ## Usage
